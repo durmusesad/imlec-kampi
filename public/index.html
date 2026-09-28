@@ -115,10 +115,36 @@
     font: inherit; font-weight: 800; padding: 8px 18px; border: 2px solid var(--ink); border-radius: 10px;
     background: #fff; cursor: pointer; box-shadow: 2px 2px 0 var(--ink);
   }
-  #hint {
-    position: fixed; bottom: 14px; left: 14px; font-size: 12px; opacity: .65; background: rgba(255,248,236,.7);
-    padding: 4px 8px; border-radius: 8px;
+  /* Tuş rehberi */
+  #keys {
+    position: fixed; bottom: 14px; left: 14px; background: var(--paper); border: 2px solid var(--ink);
+    border-radius: 14px; padding: 10px 12px 8px; box-shadow: 3px 3px 0 var(--ink); font-size: 13px;
+    transition: opacity .2s;
   }
+  #keys h4 {
+    margin: 0 0 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .6;
+    display: flex; justify-content: space-between; gap: 16px;
+  }
+  #keys .grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+  #keys .k { display: flex; gap: 3px; align-items: center; }
+  #keys .or { font-size: 11px; opacity: .5; margin: 0 2px; }
+  kbd {
+    display: inline-flex; align-items: center; justify-content: center; min-width: 24px; height: 24px; padding: 0 6px;
+    font: 800 12px "Nunito", "Trebuchet MS", system-ui, sans-serif; color: var(--ink); background: #fff;
+    border: 2px solid var(--ink); border-bottom-width: 4px; border-radius: 7px; line-height: 1;
+  }
+  kbd.wide { min-width: 64px; }
+  kbd.mouse { padding: 0 7px; }
+  #keys .lbl { font-weight: 700; white-space: nowrap; }
+  #keys .mode-match { display: none; }
+  body.in-match #keys .mode-lobby { display: none; }
+  body.in-match #keys .mode-match { display: grid; }
+  #keys.min .grid, #keys.min h4 .t { display: none !important; }
+  #keys.min { padding: 6px 10px; }
+  #keys.min h4 { margin: 0; }
+  body.normal #keys { opacity: .45; }
+  #keys .show-t { display: none; }
+  #keys.min .show-t { display: inline; }
 
   #score {
     position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
@@ -147,7 +173,25 @@
 
 <div id="players" class="hidden"><h3>Oyuncular</h3><div id="plist"></div></div>
 <div id="status" class="hidden"></div>
-<div id="hint" class="hidden">Q: normal imleç · T: sohbet · Sağ tık: emoji menüsü · 1–8: emoji · E: emojileri düzenle · L: takımdan çık · Maçta: WASD/oklar + Space</div>
+<div id="keys" class="hidden">
+  <h4><span class="t mode-lobby-t">Kısayollar</span><span><kbd>H</kbd> <span class="t">gizle</span><span class="show-t">kısayollar</span></span></h4>
+  <div class="grid mode-lobby">
+    <span class="k"><kbd class="mouse">Tık</kbd></span><span class="lbl">Ping at · alanı seç</span>
+    <span class="k"><kbd class="mouse">Sağ tık</kbd></span><span class="lbl">Emoji menüsü</span>
+    <span class="k"><kbd>1</kbd><span class="or">–</span><kbd>8</kbd></span><span class="lbl">Hızlı emoji</span>
+    <span class="k"><kbd>E</kbd></span><span class="lbl">Emojileri düzenle</span>
+    <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
+    <span class="k"><kbd>Q</kbd></span><span class="lbl">Normal imleç</span>
+  </div>
+  <div class="grid mode-match">
+    <span class="k"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="lbl">Hareket (oklar da olur)</span>
+    <span class="k"><kbd class="wide">Space</kbd></span><span class="lbl">Vuruş (topa değerken)</span>
+    <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
+    <span class="k"><kbd>1</kbd><span class="or">–</span><kbd>8</kbd></span><span class="lbl">Hızlı emoji</span>
+    <span class="k"><kbd>L</kbd></span><span class="lbl">Maçtan çık</span>
+    <span class="k"><kbd>Q</kbd></span><span class="lbl">Normal imleç</span>
+  </div>
+</div>
 <div id="chatlog" class="hidden"></div>
 <div id="chatbox" class="hidden"><input id="chat" placeholder="Mesaj yaz, Enter ile gönder (Esc: vazgeç)…" autocomplete="off"><span id="counter">0/80</span></div>
 <div id="goal"></div>

@@ -252,6 +252,7 @@ wss.on('connection', (ws) => {
         // Maç girdisi: her istemci tick'i için bir tane; sunucu her tick'te bir tane uygular
         if (!match || !match.players.has(me.id) || !num(m.s) || !num(m.k)) return;
         me.queue.push([m.s, m.k & 31]);
+        me.lastInputAt = Date.now();
         if (me.queue.length > 8) me.queue.splice(0, me.queue.length - 8); // gecikme birikmesin
         break;
       }
@@ -353,12 +354,15 @@ function broadcastMatch() {
 
 let endAt = 0;
 function step() {
-  // Her oyuncu için sıradaki girdiyi uygula; kuyruk boşsa son girdi devam eder
+  // Her oyuncu için sıradaki girdiyi uygula; kuyruk boşsa son girdi kısa süre devam eder
+  const now = Date.now();
   for (const d of match.players.values()) {
     const p = players.get(d.id);
     if (!p) continue;
-    if (!p.ws) {
+    if (!p.ws || now - (p.lastInputAt || 0) > 250) {
+      // Bağlantı yok ya da istemci girdi göndermeyi kesti (sekme arka planda): tuşlar bırakılmış sayılır
       match.setInput(d.id, 0);
+      p.queue.length = 0;
       continue;
     }
     const next = p.queue.shift();

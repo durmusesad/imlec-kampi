@@ -85,7 +85,8 @@
     store.set('imlec-kampi:oyuncu', { name, color: me.color });
     joined = true;
     $('join').classList.add('hidden');
-    ['players', 'hint', 'chatlog'].forEach((id) => $(id).classList.remove('hidden'));
+    ['players', 'keys', 'chatlog'].forEach((id) => $(id).classList.remove('hidden'));
+    $('keys').classList.toggle('min', !!store.get('imlec-kampi:kisayol-gizli', false));
     connect();
     requestLock();
     updateModeUi();
@@ -193,7 +194,17 @@
     return k;
   }
   document.addEventListener('keyup', (e) => keys.delete(e.code));
-  addEventListener('blur', () => keys.clear());
+  // Sekme/pencere arka plana geçince tuşları bırak ve sunucuya hemen bildir
+  function releaseAll() {
+    keys.clear();
+    if (inMatch() && sim) {
+      seq++;
+      pending.push([seq, 0]);
+      send({ t: 'i', s: seq, k: 0 });
+    }
+  }
+  addEventListener('blur', releaseAll);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
 
   document.addEventListener('keydown', (e) => {
     if (!joined || chatting || !locked) return; // normal modda tuşlar siteye gitmez
@@ -219,6 +230,11 @@
       case 'KeyE':
         openEmojiPanel();
         return;
+      case 'KeyH': {
+        const min = $('keys').classList.toggle('min');
+        store.set('imlec-kampi:kisayol-gizli', min);
+        return;
+      }
     }
     const n = /^Digit([1-8])$/.exec(e.code);
     if (n) sendEmote(quick[+n[1] - 1]);
@@ -434,6 +450,7 @@
         break;
       case 'lobby': {
         lobby = m;
+        document.body.classList.toggle('in-match', inMatch());
         if (!m.running) resetMatchView();
         keys.clear();
         renderPlayerList();
@@ -635,8 +652,6 @@
       if (g.ff > 0) {
         const empty = g.p.some((q) => q[1] === 0) ? H.teams.blue.name : H.teams.red.name;
         msg = `${empty} takımda oyuncu yok — ${ffLeft} sn içinde kimse katılmazsa maç hükmen biter`;
-      } else if (g.ph === 'kickoff') {
-        msg = `${H.teams[g.ko].name} başlıyor · ${Math.ceil(g.tmr / HB.TPS)} sn sonra orta yuvarlak herkese açılır`;
       }
       key = [g.s[0], g.s[1], g.half, mm, ss, msg].join('|');
       if (key !== hudKey) {
@@ -1151,7 +1166,7 @@
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('Takım alanına tıkla → hazırsın. Maçta: WASD/oklar hareket, Space vuruş, L: takımdan çık.', 1000, 1098);
+    ctx.fillText('Takım alanına tıkla, hazır ol · Başlat’a tıkla, maç başlasın', 1000, 1098);
   }
 
   function drawPings(time) {
@@ -1380,21 +1395,6 @@
         ctx.stroke();
       }
     }
-    // Başlama vuruşu sayacı: orta yuvarlağın etrafında azalan halka
-    if (meta && lobby.running && meta.ph === 'kickoff') {
-      const k = Math.max(0, meta.tmr / (H.kickoffSeconds * HB.TPS));
-      ctx.strokeStyle = H.teams[meta.ko].color;
-      ctx.lineWidth = 6;
-      ctx.beginPath();
-      ctx.arc(H.cx, H.cy, H.kickOffRadius * S + 6, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(255,255,255,0.85)';
-      ctx.font = 'bold 22px Arial, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(String(Math.ceil(meta.tmr / HB.TPS)), H.cx, H.cy - H.kickOffRadius * S + 26);
-    }
-
     let bpos = { x: H.cx, y: H.cy };
     if (rp) {
       for (const [id, d] of rp) {
