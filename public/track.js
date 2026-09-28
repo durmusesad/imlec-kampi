@@ -24,10 +24,10 @@
   ];
 
   const HALF_SCALE_LENGTH = 5338 * 2.5; // 5.338 km, yarı ölçekte 1 m = 2.5 px
-  const ROAD_W = 72; // oynanabilirlik için gerçek ölçekten biraz geniş (yan yana ~6 araç)
+  const ROAD_W = 144; // oynanabilirlik için gerçek ölçekten geniş (yan yana ~12 araç)
   const HALF = ROAD_W / 2;
-  const KERB_W = 8;
-  const RUNOFF = 46; // yol kenarından lastik bariyerine kadar çim/kaçış alanı
+  const KERB_W = 12;
+  const RUNOFF = 50; // yol kenarından lastik bariyerine kadar çim/kaçış alanı
   const ORIGIN = { x: 3150, y: 120 }; // pistin dünyadaki sol üst köşesi (gölün ve buz pistinin sağı)
 
   // Catmull-Rom ile kapalı eğri, sonra düzgün aralıklarla yeniden örnekleme
@@ -85,7 +85,7 @@
   }
 
   // Yarıçapı MIN_RADIUS'tan küçük virajları sadece o bölgede yumuşat (yol iç kenarı katlanmasın)
-  const MIN_RADIUS = 62;
+  const MIN_RADIUS = 92; // yol yarı genişliğinden (72) büyük olmalı
   function radiusAt(p, i, w) {
     const n = p.length, a = p[(i - w + n) % n], b = p[i], c = p[(i + w) % n];
     const ab = Math.hypot(b[0] - a[0], b[1] - a[1]), bc = Math.hypot(c[0] - b[0], c[1] - b[1]), ca = Math.hypot(a[0] - c[0], a[1] - c[1]);

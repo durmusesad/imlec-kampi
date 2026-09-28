@@ -33,6 +33,9 @@
   const ball = { x: H.cx, y: H.cy };
   const keys = new Set();
   const cam = { x: 0, y: 0, init: false };
+  // Yarışta kamera yakınlaşır. wvw/wvh: dünyada görünen alanın boyutu (ekran / zoom)
+  let zoom = 1, wvw = innerWidth, wvh = innerHeight;
+  const RACE_ZOOM = 1.6;
   let vw = innerWidth, vh = innerHeight, dpr = 1;
 
   // Maç tahmini (HaxBall gibi): istemci aynı fiziği çalıştırır, sunucu durumu gelince düzeltir
@@ -743,7 +746,7 @@
   }
   function nearTrack() {
     const R = TR.REGION;
-    return cam.x + vw > R.x && cam.x < R.x + R.w && cam.y + vh > R.y && cam.y < R.y + R.h;
+    return cam.x + wvw > R.x && cam.x < R.x + R.w && cam.y + wvh > R.y && cam.y < R.y + R.h;
   }
   function resetRaceView() {
     rsim = null;
@@ -2010,7 +2013,7 @@
     ctx.drawImage(mm, x0, y0);
     ctx.strokeStyle = 'rgba(255,255,255,0.9)';
     ctx.lineWidth = 1.5;
-    ctx.strokeRect(x0 + cam.x * MM_S, y0 + cam.y * MM_S, vw * MM_S, vh * MM_S);
+    ctx.strokeRect(x0 + cam.x * MM_S, y0 + cam.y * MM_S, wvw * MM_S, wvh * MM_S);
     ctx.fillStyle = '#fff';
     ctx.strokeStyle = INK;
     ctx.lineWidth = 1;
@@ -2143,7 +2146,7 @@
 
   function drawRadial() {
     const R = 82;
-    const sx = me.x - Math.round(cam.x), sy = me.y - Math.round(cam.y); // menü imleci/diski takip eder
+    const sx = (me.x - Math.round(cam.x)) * zoom, sy = (me.y - Math.round(cam.y)) * zoom; // menü imleci/diski takip eder
     ctx.save();
     ctx.fillStyle = 'rgba(30,24,18,0.55)';
     ctx.beginPath();
@@ -2187,6 +2190,8 @@
     dpr = Math.min(window.devicePixelRatio || 1, 2);
     vw = innerWidth;
     vh = innerHeight;
+    wvw = vw / zoom;
+    wvh = vh / zoom;
     canvas.width = Math.round(vw * dpr);
     canvas.height = Math.round(vh * dpr);
     canvas.style.width = vw + 'px';
@@ -2197,14 +2202,14 @@
 
   const camLead = { x: 0, y: 0 };
   function updateCamera(dt) {
-    const tx = me.x + camLead.x - vw / 2, ty = me.y + camLead.y - vh / 2;
+    const tx = me.x + camLead.x - wvw / 2, ty = me.y + camLead.y - wvh / 2;
     const k = cam.init ? 1 - Math.exp(-dt * 5) : 1;
     cam.init = true;
     cam.x += (tx - cam.x) * k;
     cam.y += (ty - cam.y) * k;
     const clampAxis = (v, view, size) => (view >= size ? (size - view) / 2 : Math.max(0, Math.min(size - view, v)));
-    cam.x = clampAxis(cam.x, vw, W.W);
-    cam.y = clampAxis(cam.y, vh, W.H);
+    cam.x = clampAxis(cam.x, wvw, W.W);
+    cam.y = clampAxis(cam.y, wvh, W.H);
   }
 
   let lastRp = null;
@@ -2238,18 +2243,32 @@
       camLead.x = myCar.car.vx * 22;
       camLead.y = myCar.car.vy * 22;
     } else if (joined && !inMatch() && !inRace()) stepMovement(dt);
+    // Yakınlaştırma yumuşak geçer; görünen alan değişirken kamera merkezi sabit kalsın
+    const targetZoom = myCar ? RACE_ZOOM : 1;
+    if (Math.abs(targetZoom - zoom) > 0.001) {
+      const cx = cam.x + wvw / 2, cy = cam.y + wvh / 2;
+      zoom += (targetZoom - zoom) * (1 - Math.exp(-dt * 4));
+      wvw = vw / zoom;
+      wvh = vh / zoom;
+      cam.x = cx - wvw / 2;
+      cam.y = cy - wvh / 2;
+    } else {
+      wvw = vw / zoom;
+      wvh = vh / zoom;
+    }
     updateCamera(dt);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.fillStyle = '#ecd9a4';
     ctx.fillRect(0, 0, vw, vh);
     ctx.save();
+    ctx.scale(zoom, zoom);
     ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
     const sx = Math.max(0, Math.floor(cam.x)), sy = Math.max(0, Math.floor(cam.y));
-    const sw = Math.min(W.CAMP_W - sx, Math.ceil(vw) + 2), sh = Math.min(W.CAMP_H - sy, Math.ceil(vh) + 2);
+    const sw = Math.min(W.CAMP_W - sx, Math.ceil(wvw) + 2), sh = Math.min(W.CAMP_H - sy, Math.ceil(wvh) + 2);
     if (sw > 0 && sh > 0) ctx.drawImage(bg, sx, sy, sw, sh, sx, sy, sw, sh);
-    if (nearTrack()) TRACKDRAW.draw(ctx, cam.x, cam.y, vw, vh);
-    else if (joined) TRACKDRAW.prefetch(TR.PADS.join.x - vw / 2, TR.PADS.join.y - vh / 2);
+    if (nearTrack()) TRACKDRAW.draw(ctx, cam.x, cam.y, wvw, wvh);
+    else if (joined) TRACKDRAW.prefetch(TR.PADS.join.x - wvw / 2, TR.PADS.join.y - wvh / 2);
     drawWater(time);
     drawPads(time);
     drawMatch(time, rp);
@@ -2277,7 +2296,7 @@
   }
 
   function inView(x, y, m) {
-    return x > cam.x - m && x < cam.x + vw + m && y > cam.y - m && y < cam.y + vh + m;
+    return x > cam.x - m && x < cam.x + wvw + m && y > cam.y - m && y < cam.y + wvh + m;
   }
 
   requestAnimationFrame(frame);

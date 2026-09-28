@@ -17,9 +17,9 @@
     engineBrake: 0.012, // gaz bırakılınca
     brake: 0.062, // 320 km/h'den durma ≈ 1.8 sn
     reverseMax: 1.6,
-    turnRate: 0.062, // düşük-orta hızda en fazla dönüş (rad/tick)
+    turnRate: 0.037, // düşük-orta hızda en fazla dönüş (rad/tick)
     turnHighSpeedLoss: 0.42, // son hızda dönüş kabiliyeti bu oranda azalır
-    steerResponse: 0.28, // direksiyonun hedef açıya yaklaşma hızı
+    steerResponse: 0.12, // direksiyonun hedef açıya yaklaşma hızı (düşük = daha yumuşak)
   };
   // Yüzeyler: yan yol tutuşu (yanal hızdan her tick silinebilecek miktar), motor ve direnç çarpanları
   // Virajı savrulmadan alabileceğin en yüksek hız ≈ √(grip × yarıçap)

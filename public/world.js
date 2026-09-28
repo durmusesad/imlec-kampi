@@ -4,8 +4,8 @@
   else root.WORLD = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
   // Dünya: eski kamp alanı (3000x2000) + sağda Istanbul Park yarış pisti bölgesi
-  const W = 8000;
-  const H = 3420;
+  const W = 8100;
+  const H = 3520;
   const CAMP_W = 3000;
   const CAMP_H = 2000;
   const SPAWN = { x: 1500, y: 1150 };

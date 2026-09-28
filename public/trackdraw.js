@@ -4,10 +4,11 @@
   'use strict';
   const T = root.TRACK;
   const TILE = 512;
+  const RES = 1.6; // parçalar yakın kamera için 1.6 kat çözünürlükte çizilir (bulanık olmasın)
   const INK = '#3b2f24';
   const R = T.REGION;
   const cache = new Map(); // "tx,ty" -> canvas
-  const MAX_TILES = 48;
+  const MAX_TILES = 30;
 
   function rng(seed) {
     return () => {
@@ -33,6 +34,23 @@
     add(0.62, 0.66, 1, T.HALF + T.RUNOFF + 14); // 9-10 iç
   })();
   const STAND_DEPTH = 58;
+  // Çim alanı pistin şeklini izler: iç saha tamamen, dışarıda bariyer ve tribünlerin biraz ötesine kadar
+  const GRASS_OUT = T.HALF + T.RUNOFF + 12 + STAND_DEPTH + 70;
+  const POLY = [];
+  for (let i = 0; i < T.N; i += 3) POLY.push([T.X[i], T.Y[i]]);
+  function insideTrack(x, y) {
+    let inside = false;
+    for (let i = 0, j = POLY.length - 1; i < POLY.length; j = i++) {
+      const [xi, yi] = POLY[i], [xj, yj] = POLY[j];
+      if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function grassPath(c) {
+    c.beginPath();
+    for (let i = 0; i < POLY.length; i++) (i ? c.lineTo : c.moveTo).call(c, POLY[i][0], POLY[i][1]);
+    c.closePath();
+  }
 
   // Ağaçlar: pist bölgesinde, yoldan ve tribünlerden uzak rastgele noktalar
   const TREES = [];
@@ -41,7 +59,9 @@
     for (let k = 0; k < 900 && TREES.length < 340; k++) {
       const x = R.x + 30 + r() * (R.w - 60), y = R.y + 30 + r() * (R.h - 60);
       const p = T.project(x, y);
-      if (p && p.dist < T.HALF + T.RUNOFF + STAND_DEPTH + 40) continue;
+      const d = p ? p.dist : Infinity;
+      if (d < T.HALF + T.RUNOFF + STAND_DEPTH + 40) continue;
+      if (!insideTrack(x, y) && d > GRASS_OUT - 30) continue; // çim alanının dışına ağaç yok
       TREES.push([x, y, 14 + r() * 16, r()]);
     }
   })();
@@ -73,17 +93,29 @@
 
   function drawTile(tx, ty) {
     const cv = document.createElement('canvas');
-    cv.width = cv.height = TILE;
+    cv.width = cv.height = Math.round(TILE * RES);
     const c = cv.getContext('2d');
     const x0 = R.x + tx * TILE, y0 = R.y + ty * TILE;
+    c.scale(RES, RES);
     c.translate(-x0, -y0);
     const M = 140; // çizimlerin taşabileceği pay
     const bx0 = x0 - M, by0 = y0 - M, bx1 = x0 + TILE + M, by1 = y0 + TILE + M;
     const r = rng(tx * 7919 + ty * 104729 + 17);
 
-    // Çim: taban + çim lekeleri + biçilmiş çim şeritleri
+    // Çim: sadece pistin şeklini izleyen alan (iç saha + dış kenarın biraz ötesi); dışı kamp kumu
+    c.lineJoin = 'round';
+    c.lineCap = 'round';
+    grassPath(c);
+    c.strokeStyle = '#cdb67f'; // kumla çimin birleştiği yerde koyu kum kenarı
+    c.lineWidth = GRASS_OUT * 2 + 14;
+    c.stroke();
     c.fillStyle = '#6aa84f';
-    c.fillRect(x0, y0, TILE, TILE);
+    c.strokeStyle = '#6aa84f';
+    c.lineWidth = GRASS_OUT * 2;
+    c.fill();
+    c.stroke();
+    // Doku sadece çimin üstüne (source-atop)
+    c.globalCompositeOperation = 'source-atop';
     for (let i = 0; i < 70; i++) {
       c.fillStyle = r() < 0.5 ? 'rgba(40,90,30,0.07)' : 'rgba(170,210,120,0.07)';
       c.beginPath();
@@ -99,6 +131,7 @@
       c.lineTo(x + (r() - 0.5) * 3, y - 3 - r() * 3);
       c.stroke();
     }
+    c.globalCompositeOperation = 'source-over';
 
     c.lineJoin = 'round';
     c.lineCap = 'round';
@@ -312,17 +345,10 @@
         const t = getTile(tx, ty);
         const x = R.x + tx * TILE, y = R.y + ty * TILE;
         const w = Math.min(TILE, R.x + R.w - x), h = Math.min(TILE, R.y + R.h - y);
-        if (t) ctx.drawImage(t, 0, 0, w, h, x, y, w, h);
-        else {
-          ctx.fillStyle = '#6aa84f';
-          ctx.fillRect(x, y, w, h);
-        }
+        // 1 px üst üste bindir: yakınlaştırmada parça sınırlarında ince çizgi görünmesin
+        if (t) ctx.drawImage(t, 0, 0, w * RES, h * RES, x, y, w + 1, h + 1);
       }
     }
-    // Pist bölgesinin çevresine çit
-    ctx.strokeStyle = 'rgba(59,47,36,0.55)';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(R.x, R.y, R.w, R.h);
   }
 
   // Boşta kalan zamanlarda parçaları önceden üret (ilk kez gidilen yerde takılma olmasın)
@@ -343,8 +369,16 @@
   // Mini harita için pist çizgisi
   function drawMini(c, s) {
     c.save();
+    c.scale(s, s);
+    c.lineJoin = 'round';
+    grassPath(c);
     c.fillStyle = '#6aa84f';
-    c.fillRect(R.x * s, R.y * s, R.w * s, R.h * s);
+    c.strokeStyle = '#6aa84f';
+    c.lineWidth = GRASS_OUT * 2;
+    c.fill();
+    c.stroke();
+    c.restore();
+    c.save();
     c.strokeStyle = '#555';
     c.lineWidth = Math.max(2, T.ROAD_W * s);
     c.lineJoin = 'round';
