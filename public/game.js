@@ -554,7 +554,7 @@
         break;
       case 'end': {
         const t = m.winner ? H.teams[m.winner] : null;
-        const sub = m.reason === 'empty' ? 'Sahada oyuncu kalmadı' : `${m.score.red} - ${m.score.blue}`;
+        const sub = m.reason === 'empty' ? 'Tüm oyuncular sahadan ayrıldı' : `${m.score.red} - ${m.score.blue}`;
         if (m.reason === 'empty') announce('Maç bitti', '#fff', sub);
         else announce(t ? `${t.name} kazandı!` : 'Berabere!', t ? t.color : '#fff', sub);
         break;
@@ -1122,8 +1122,8 @@
     const box = $('raceResults');
     const list = $('rrList');
     list.innerHTML = '';
-    const reason = m.reason === 'empty' ? 'Pistte araç kalmadı' : m.reason === 'time' ? 'Süre doldu' : 'Yarış bitti';
-    $('rrTitle').textContent = '🏁 ' + reason;
+    $('rrTitle').textContent = m.reason === 'empty' ? '🏁 Yarış sona erdi' : '🏁 Yarış sonuçları';
+    $('rrSub').textContent = m.reason === 'empty' ? 'Tüm pilotlar yarıştan ayrıldı' : m.reason === 'time' ? 'Süre doldu' : '';
     m.results.forEach((r, i) => {
       const row = document.createElement('div');
       row.className = 'rrrow' + (r.id === myId ? ' me' : '');

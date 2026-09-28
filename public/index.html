@@ -220,6 +220,8 @@
   #rBoard .rrow.me { color: #ffe08a; }
   #raceResults { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
   #raceResults .card { width: 420px; pointer-events: auto; }
+  #rrSub { margin: -2px 0 0; font-size: 14px; opacity: .65; }
+  #rrSub:empty { display: none; }
   #rrList { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
   .rrrow { display: grid; grid-template-columns: 36px 1fr auto auto; gap: 10px; align-items: center; text-align: left; font-weight: 700; }
   .rrrow span:nth-child(3) { font-variant-numeric: tabular-nums; }
@@ -283,7 +285,7 @@
   </div>
   <div id="rBoard"></div>
 </div>
-<div id="raceResults" class="hidden"><div class="card"><h1 id="rrTitle">🏁 Yarış bitti</h1><div id="rrList"></div></div></div>
+<div id="raceResults" class="hidden"><div class="card"><h1 id="rrTitle">🏁 Yarış sonuçları</h1><p id="rrSub"></p><div id="rrList"></div></div></div>
 <div id="toast"></div>
 <div id="score" class="hidden"><span id="sHalf">1. Devre</span><span class="team red" id="sRed">0</span><span id="sTime">01:00</span><span class="team blue" id="sBlue">0</span><span id="sMsg" class="hidden"></span></div>
 
