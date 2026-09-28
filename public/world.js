@@ -7,9 +7,47 @@
   const H = 2000;
   const SPAWN = { x: 1500, y: 1150 };
 
-  const FIELD = { x: 450, y: 330, w: 1100, h: 640 };
-  const GOAL = { depth: 70, mouth: 200 };
-  const BALL_R = 22;
+  // HaxBall "Classic" stadyumu. Fizik HaxBall birimlerinde (merkez 0,0) hesaplanır,
+  // dünyaya S katıyla ölçeklenerek yerleştirilir.
+  const HAX = {
+    S: 1.5,
+    cx: 1000,
+    cy: 650,
+    width: 420, height: 200, // stadyum yarı ölçüleri (oyuncu sınırı)
+    ballAreaX: 370, ballAreaY: 170, // top alanı
+    goalY: 64, goalDepth: 30,
+    spawnDistance: 170,
+    kickOffRadius: 75,
+    postRadius: 8,
+    player: {
+      radius: 15, bCoef: 0.5, invMass: 0.5, damping: 0.96, acceleration: 0.1,
+      kickingAcceleration: 0.07, kickingDamping: 0.96, kickStrength: 5, kickback: 0,
+    },
+    ball: { radius: 10, bCoef: 0.5, invMass: 1, damping: 0.99 },
+    kickRange: 4,
+    scoreLimit: 3,
+    timeLimit: 180, // sn
+    teams: {
+      red: { name: 'Kırmızı', color: '#e56e56' },
+      blue: { name: 'Mavi', color: '#5689e5' },
+    },
+  };
+  const toWorld = (x, y) => ({ x: HAX.cx + x * HAX.S, y: HAX.cy + y * HAX.S });
+
+  // Stadyum dünya dikdörtgeni (seyirciler maç sırasında buraya giremez)
+  const FIELD = {
+    x: HAX.cx - HAX.width * HAX.S,
+    y: HAX.cy - HAX.height * HAX.S,
+    w: HAX.width * 2 * HAX.S,
+    h: HAX.height * 2 * HAX.S,
+  };
+
+  // Lobi alanları: stadyumun altında takım seçme ve başlatma yerleri
+  const PADS = {
+    red: { x: 610, y: 995, w: 200, h: 90 },
+    start: { x: 900, y: 995, w: 200, h: 90 },
+    blue: { x: 1190, y: 995, w: 200, h: 90 },
+  };
 
   const LAKE = { cx: 2330, cy: 560, rx: 420, ry: 280, mult: 0.45 };
   const RIVER = {
@@ -87,12 +125,8 @@
     return kind === 'lake' || kind === 'river';
   }
 
-  // Kale ağızlarının y aralığı
-  const GOAL_Y1 = FIELD.y + FIELD.h / 2 - GOAL.mouth / 2;
-  const GOAL_Y2 = FIELD.y + FIELD.h / 2 + GOAL.mouth / 2;
-
   return {
-    W, H, SPAWN, FIELD, GOAL, GOAL_Y1, GOAL_Y2, BALL_R,
+    W, H, SPAWN, FIELD, HAX, PADS, toWorld,
     LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOTES, TREES,
     terrainAt, riverNearest, inEllipse, inRect, isWater,
   };

@@ -14,6 +14,7 @@
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #e9d6a8; font-family: "Nunito", "Trebuchet MS", system-ui, sans-serif; color: var(--ink); }
   canvas { display: block; position: fixed; inset: 0; }
+  body.playing canvas { cursor: none; }
   .hidden { display: none !important; }
 
   #join, #resume {
@@ -72,6 +73,16 @@
     padding: 4px 8px; border-radius: 8px;
   }
 
+  #score {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
+    background: #1a2130; color: #fff; border: 2px solid var(--ink); border-radius: 10px; padding: 5px 12px;
+    font: 700 18px Arial, sans-serif; box-shadow: 3px 3px 0 var(--ink);
+  }
+  #score .team { min-width: 34px; text-align: center; border-radius: 6px; padding: 2px 8px; }
+  #score .red { background: #e56e56; }
+  #score .blue { background: #5689e5; }
+  #score #sTime { font-variant-numeric: tabular-nums; min-width: 64px; text-align: center; }
+
   #goal {
     position: fixed; top: 22%; left: 50%; transform: translate(-50%, -50%); font-size: 64px; font-weight: 900;
     color: #fff; -webkit-text-stroke: 3px var(--ink); text-shadow: 5px 5px 0 var(--ink); pointer-events: none;
@@ -85,9 +96,10 @@
 
 <div id="players" class="hidden"><h3>Oyuncular</h3><div id="plist"></div></div>
 <div id="status" class="hidden"></div>
-<div id="hint" class="hidden">Tıkla: ping · 1–5: emoji · Enter: sohbet · Esc: imleci bırak</div>
+<div id="hint" class="hidden">Tıkla: ping · 1–5: emoji · Enter: sohbet · Esc: imleci bırak · Maçta: WASD/oklar + Space</div>
 <div id="chatbox" class="hidden"><input id="chat" maxlength="80" placeholder="Bir şey yaz, Enter ile gönder…" autocomplete="off"></div>
 <div id="goal"></div>
+<div id="score" class="hidden"><span class="team red" id="sRed">0</span><span id="sTime">00:00</span><span class="team blue" id="sBlue">0</span></div>
 
 <div id="join">
   <div class="card">
@@ -96,7 +108,7 @@
     <input id="name" maxlength="16" placeholder="Adın" autocomplete="off">
     <div class="colors" id="colors"></div>
     <button class="go" id="joinBtn">Katıl</button>
-    <div class="help">Nehir seni sürükler, çamur yavaşlatır, buzda kayarsın.<br>Topu imlecinle karşı kaleye it!</div>
+    <div class="help">Nehir seni sürükler, çamur yavaşlatır, buzda kayarsın.<br>Sahanın altındaki takım alanına tıkla, HaxBall maçı başlat!</div>
   </div>
 </div>
 
