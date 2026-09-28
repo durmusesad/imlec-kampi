@@ -6,10 +6,6 @@
   const INK = '#3b2f24';
   const INTERP_DELAY = 100; // ms — diğer imleçler bu kadar geriden çizilir
   const SEND_EVERY = 33; // ms (~30 Hz)
-  const TICK = 1 / HB.TPS;
-  // Kendi girdimizi kaç adım geç uygulayalım: sunucudaki girdi tamponu kadar (2–5 adım, 33–83 ms).
-  // Böylece dünya daha az ileriye tahmin edilir; top/rakip ışınlanmaları büyük ölçüde kaybolur
-  let inputDelayTicks = 2;
 
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d', { alpha: false });
@@ -36,15 +32,13 @@
   const cam = { x: 0, y: 0, init: false };
   let vw = innerWidth, vh = innerHeight, dpr = 1;
 
-  // Maç tahmini (HaxBall gibi): istemci aynı fiziği çalıştırır, sunucu durumu gelince düzeltir
-  let sim = null; // HB.Match
-  let meta = null; // son sunucu anlık görüntüsü
-  let simAcc = 0;
-  let seq = 0;
-  let pending = []; // sunucunun henüz uygulamadığı kendi girdilerimiz [seq, bits]
-  let prevPos = new Map(); // son adımdan önceki konumlar (kareler arası yumuşatma)
-  const offsets = new Map(); // düzeltmelerde oluşan görsel sapma, zamanla sönümlenir
-  let corrStats = null; // yerel testte düzeltme istatistiği
+  // Maç görünümü: her şey sunucuda hesaplanır; tarayıcı sunucu durumlarını biraz geriden,
+  // iki durum arasında ara değerle çizer (herkes aynı şeyi görür, tahmin/düzeltme yok)
+  const MATCH_DELAY_TICKS = 3; // ≈ 50 ms: paket dalgalanmasını yutacak kadar tampon (ilk sürümdeki gibi)
+  let meta = null; // son sunucu anlık görüntüsü (skor, süre, faz)
+  let snaps = []; // [{n, p: Map(id -> {x, y, team, input}), b: {x, y}}] sunucu adımına göre sıralı
+  let clockOff = null; // sunucu zamanı (ms) - yerel zaman tahmini
+  let lastInput = -1;
 
   // Hızlı emoji menüsü (kişiye özel, tarayıcıda saklanır)
   let quick = store.get('imlec-kampi:hizli-emoji', null);
@@ -140,6 +134,7 @@
       radial = null;
       keys.clear();
       closeChat();
+      sendInput();
     }
     updateModeUi();
   });
@@ -221,15 +216,23 @@
     for (const c of keys) k |= KEYMAP[c] || 0;
     return k;
   }
-  document.addEventListener('keyup', (e) => keys.delete(e.code));
+  // Tuş durumu değişince hemen gönder; maçtayken bağlantının canlı olduğunu da 100 ms'de bir bildir
+  function sendInput(force) {
+    if (!inMatch()) return;
+    const k = inputBits();
+    if (!force && k === lastInput) return;
+    lastInput = k;
+    send({ t: 'input', k });
+  }
+  setInterval(() => sendInput(true), 100);
+  document.addEventListener('keyup', (e) => {
+    keys.delete(e.code);
+    sendInput();
+  });
   // Sekme/pencere arka plana geçince tuşları bırak ve sunucuya hemen bildir
   function releaseAll() {
     keys.clear();
-    if (inMatch() && sim) {
-      seq++;
-      pending.push([seq, 0]);
-      send({ t: 'i', s: seq, k: 0 });
-    }
+    sendInput();
   }
   addEventListener('blur', releaseAll);
   document.addEventListener('visibilitychange', () => {
@@ -243,6 +246,7 @@
     if (KEYMAP[e.code] && playing) {
       e.preventDefault();
       keys.add(e.code);
+      sendInput();
       return;
     }
     if (e.repeat) return;
@@ -281,6 +285,7 @@
     updateCounter();
     chatInput.focus();
     sendStatus();
+    sendInput();
   }
   function closeChat() {
     if (!chatting) return;
@@ -289,6 +294,7 @@
     $('chatbox').classList.add('hidden');
     $('chatlog').classList.remove('open');
     sendStatus();
+    sendInput();
   }
   function updateCounter() {
     const n = [...chatInput.value].length;
@@ -436,12 +442,10 @@
   }
 
   function resetMatchView() {
-    sim = null;
     meta = null;
-    pending = [];
-    offsets.clear();
-    prevPos = new Map();
-    simAcc = 0;
+    snaps = [];
+    clockOff = null;
+    lastInput = -1;
   }
 
   function handle(m) {
@@ -554,119 +558,45 @@
     send({ t: 'pos', x, y });
   }, SEND_EVERY);
 
-  // ---------- Maç tahmini ----------
-  function simPositions() {
-    const m = new Map();
-    for (const p of sim.players.values()) m.set(p.id, { x: p.x, y: p.y });
-    m.set('ball', { x: sim.ball.x, y: sim.ball.y });
-    return m;
-  }
-
-  function simStep(bits) {
-    prevPos = simPositions();
-    if (bits != null) sim.setInput(myId, bits);
-    sim.step(true);
-  }
-
+  // ---------- Maç görünümü ----------
   function onSnapshot(g) {
     meta = g;
     if (!lobby.running) return;
-    if (!sim) {
-      sim = new HB.Match();
-      sim.load(g);
-      pending = [];
-      prevPos = simPositions();
-      updateHud();
-      return;
+    // Sunucu saatini tahmin et: paket erken gelemez, sadece gecikir → en erken geliş çizgisini izle
+    const off = g.n * (1000 / HB.TPS) - performance.now();
+    clockOff = clockOff == null || off > clockOff || off < clockOff - 300 ? off : clockOff - 0.05;
+    const p = new Map();
+    for (const q of g.p) p.set(q[0], { x: q[2], y: q[3], team: q[1] ? 'blue' : 'red', input: q[6] });
+    const snap = { n: g.n, p, b: { x: g.b[0], y: g.b[1] } };
+    if (snaps.length && g.n <= snaps[snaps.length - 1].n) {
+      // Eski/tekrar paket (yeniden bağlanma vb.): sırayı koru
+      snaps = snaps.filter((s) => s.n < g.n);
     }
-    // Önceki sapmayı hariç tutarak ölç; yoksa sapma her güncellemede kendini tekrar ekleyip büyür
-    // Ekranda o an çizilen ara konuma (alpha) göre ölç ki düzeltme görsel olarak kesintisiz olsun
-    const alpha = Math.min(1, simAcc / TICK);
-    const before = renderPositions(alpha, true);
-    sim.load(g);
-    const mine = g.p.find((q) => q[0] === myId);
-    if (mine) {
-      const ack = mine[8];
-      // Sunucu tamponuna doğru her güncellemede en fazla 1 adım yaklaş (ani sıçrama olmasın)
-      const want = Math.max(2, Math.min(5, mine[9] || 2));
-      if (want > inputDelayTicks) inputDelayTicks++;
-      else if (want < inputDelayTicks) inputDelayTicks--;
-      pending = pending.filter(([s]) => s > ack);
-      if (pending.length > 90) pending = pending.slice(-90);
-      // Sunucunun henüz işlemediği girdilerimizi yeniden oynat. Son INPUT_DELAY girdi henüz oynatılmaz:
-      // dünya o kadar az ileriye tahmin edilir (rakip/top düzeltmeleri küçülür), karşılığında kendi
-      // tuşlarımız INPUT_DELAY adım geç görünür (HaxBall'daki giriş gecikmesi gibi)
-      const upto = Math.max(0, pending.length - inputDelay());
-      for (let i = 0; i < upto; i++) simStep(pending[i][1]);
-      if (!upto) prevPos = simPositions();
-    } else {
-      pending = [];
-      prevPos = simPositions();
-    }
-    // Düzeltmeyi bir anda değil, birkaç karede yumuşakça uygula
-    const after = renderPositions(alpha, true);
-    for (const [id, a] of after) {
-      const b = before.get(id);
-      if (!b) continue;
-      const o = offsets.get(id) || { x: 0, y: 0 };
-      o.x += b.x - a.x;
-      o.y += b.y - a.y;
-      if (corrStats) {
-        const k = id === 'ball' ? 'ball' : id === myId ? 'me' : 'other';
-        const d = Math.hypot(b.x - a.x, b.y - a.y);
-        corrStats[k].sum += d;
-        if (d > 0.5) corrStats[k].n++;
-        corrStats[k].max = Math.max(corrStats[k].max, d);
-      }
-      if (Math.hypot(o.x, o.y) > 60) { o.x = 0; o.y = 0; } // büyük sıçrama (gol, devre): direkt geç
-      offsets.set(id, o);
-    }
+    snaps.push(snap);
+    if (snaps.length > 120) snaps.shift();
     updateHud();
   }
 
-  // Kareler arası ara konum + düzeltme sapması (HaxBall birimleri)
-  function renderPositions(alpha, noOffset) {
+  // Çizilecek maç durumu (HaxBall birimleri): sunucu adım çizgisinin MATCH_DELAY_TICKS gerisi
+  function matchView() {
+    const n = snaps.length;
+    if (!n || clockOff == null) return null;
+    const rt = (performance.now() + clockOff) / (1000 / HB.TPS) - MATCH_DELAY_TICKS;
+    let a = snaps[0], b = a;
+    if (rt >= snaps[n - 1].n) a = b = snaps[n - 1];
+    else {
+      for (let i = n - 1; i > 0; i--) {
+        if (snaps[i - 1].n <= rt) { a = snaps[i - 1]; b = snaps[i]; break; }
+      }
+    }
+    const k = b.n === a.n ? 0 : Math.max(0, Math.min(1, (rt - a.n) / (b.n - a.n)));
     const out = new Map();
-    if (!sim) return out;
-    const cur = simPositions();
-    for (const [id, c] of cur) {
-      const p = prevPos.get(id) || c;
-      const o = noOffset ? null : offsets.get(id);
-      out.set(id, {
-        x: p.x + (c.x - p.x) * alpha + (o ? o.x : 0),
-        y: p.y + (c.y - p.y) * alpha + (o ? o.y : 0),
-      });
+    for (const [id, pb] of b.p) {
+      const pa = a.p.get(id) || pb;
+      out.set(id, { x: pa.x + (pb.x - pa.x) * k, y: pa.y + (pb.y - pa.y) * k, team: pb.team, input: pb.input });
     }
+    out.set('ball', { x: a.b.x + (b.b.x - a.b.x) * k, y: a.b.y + (b.b.y - a.b.y) * k });
     return out;
-  }
-
-  function inputDelay() {
-    return window.__inputDelay != null ? window.__inputDelay : inputDelayTicks;
-  }
-
-  function advanceSim(dt) {
-    if (!sim) return;
-    const playing = inMatch() && sim.players.has(myId);
-    simAcc += dt;
-    let steps = 0;
-    while (simAcc >= TICK && steps < 6) {
-      simAcc -= TICK;
-      steps++;
-      if (playing) {
-        const k = inputBits();
-        seq++;
-        pending.push([seq, k]);
-        send({ t: 'i', s: seq, k });
-        const d = inputDelay();
-        simStep(pending.length > d ? pending[pending.length - 1 - d][1] : null);
-      } else simStep(null);
-    }
-    if (steps === 6) simAcc = 0; // sekme arka plandaydı: yetişmeye çalışma
-    const decay = Math.exp(-dt * 14);
-    for (const o of offsets.values()) {
-      o.x *= decay;
-      o.y *= decay;
-    }
   }
 
   // ---------- Sosyal ----------
@@ -761,12 +691,9 @@
     // Yerel test kancası
     window.__imlec = {
       me, players, send: (m) => send(m), step: (dt) => stepMovement(dt),
-      get sim() { return sim; }, get pending() { return pending; }, keys,
+      keys, get meta() { return meta; },
       setLocked: (v) => { locked = v; updateModeUi(); },
-      advance: (dt) => advanceSim(dt),
       get rp() { return lastRp; },
-      startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
-      get stats() { return corrStats; },
     };
   }
 
@@ -1490,7 +1417,7 @@
   // ---------- Maç çizimi ----------
   function drawMatch(time, rp) {
     const S = H.S;
-    const half = sim ? sim.half : 1;
+    const half = meta && lobby.running ? meta.half : 1;
     // Kale çizgisi ve direkler: 2. devrede taraflar değiştiği için canlı çizilir
     for (const team of ['red', 'blue']) {
       const side = (team === 'red' ? -1 : 1) * (half === 2 ? -1 : 1);
@@ -1516,9 +1443,7 @@
     if (rp) {
       for (const [id, d] of rp) {
         if (id === 'ball') continue;
-        const q = sim.players.get(id);
-        if (!q) continue;
-        drawDisc(players.get(id), W.toWorld(d.x, d.y), q, id === myId, time);
+        drawDisc(players.get(id), W.toWorld(d.x, d.y), d, id === myId, time);
       }
       const b = rp.get('ball');
       bpos = W.toWorld(b.x, b.y);
@@ -1667,8 +1592,7 @@
   function frame(time) {
     const dt = Math.min(0.1, (time - last) / 1000);
     last = time;
-    advanceSim(dt);
-    const rp = sim ? renderPositions(Math.min(1, simAcc / TICK)) : null;
+    const rp = lobby.running ? matchView() : null;
     lastRp = rp;
     const myDisc = inMatch() && rp ? rp.get(myId) : null;
     if (myDisc) {
@@ -1698,7 +1622,7 @@
     for (const p of players.values()) {
       if (p.id === myId) continue;
       p.render = interp(p.snaps, rt);
-      if (p.render && !(sim && sim.players.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
+      if (p.render && !(rp && rp.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
         drawCursor(p, p.render.x, p.render.y, time, false);
       }
     }

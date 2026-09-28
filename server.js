@@ -138,7 +138,6 @@ function startMatch() {
   lastResult = null;
   for (const p of players.values()) {
     if (!p.team) continue;
-    p.queue = [];
     match.addPlayer(p.id, p.team);
   }
   broadcastLobby();
@@ -164,7 +163,6 @@ function setTeam(p, team) {
     teleportOut(p, old);
   }
   p.team = team;
-  p.queue = [];
   if (match && team) match.addPlayer(p.id, team);
   broadcastLobby();
 }
@@ -206,7 +204,6 @@ wss.on('connection', (ws) => {
         me = restored;
         me.ws = ws;
         me.ghostUntil = 0;
-        me.queue = [];
         me.afk = me.typing = false;
       } else {
         if (players.size >= MAX_PLAYERS) {
@@ -219,7 +216,7 @@ wss.on('connection', (ws) => {
         const y = num(m.y) ? clamp(m.y, 0, WORLD.H) : WORLD.SPAWN.y;
         me = {
           id: nextId++, ws, token: tokenInUse ? null : token, x, y, team: null,
-          queue: [], ack: 0, ghostUntil: 0, rate: {},
+          ghostUntil: 0, rate: {},
         };
         players.set(me.id, me);
         scores[me.id] = 0;
@@ -235,7 +232,7 @@ wss.on('connection', (ws) => {
         chat: chatLog,
       });
       send(ws, lobbyState());
-      if (match) send(ws, { t: 'g', ...match.snapshot(ackOf) });
+      if (match) send(ws, { t: 'g', ...match.snapshot() });
       broadcast({ t: 'join', p: publicPlayer(me) }, me.id); // geri dönende isim/renk değişmiş olabilir
       return;
     }
@@ -249,12 +246,11 @@ wss.on('connection', (ws) => {
         me.y = clamp(m.y, 0, WORLD.H);
         break;
       }
-      case 'i': {
-        // Maç girdisi: her istemci tick'i için bir tane; sunucu her tick'te bir tane uygular
-        if (!match || !match.players.has(me.id) || !num(m.s) || !num(m.k)) return;
-        me.queue.push([m.s, m.k & 31]);
+      case 'input': {
+        // Maç girdisi: tuş durumu değişince (ve 100 ms'de bir canlılık için) gelir, hemen uygulanır
+        if (!match || !match.players.has(me.id) || !num(m.k)) return;
+        match.setInput(me.id, m.k & 31);
         me.lastInputAt = Date.now();
-        if (me.queue.length > 8) me.queue.splice(0, me.queue.length - 8); // gecikme birikmesin
         break;
       }
       case 'pad': {
@@ -330,7 +326,6 @@ wss.on('connection', (ws) => {
     }
     // Beklenmedik kopma (wifi, Cloud Run 60 dk sınırı): kısa süre yerini koru ama imlecini gizle
     me.ws = null;
-    me.queue = [];
     me.ghostUntil = Date.now() + RECONNECT_GRACE;
     if (match) match.setInput(me.id, 0);
     broadcast({ t: 'away', id: me.id });
@@ -354,55 +349,17 @@ setInterval(() => {
 }, 1000);
 
 // ---------- Maç döngüsü (60 Hz, otoriter) ----------
-function ackOf(id) {
-  const p = players.get(id);
-  return p ? [p.ack, p.buf || 2] : [0, 2];
-}
-
 function broadcastMatch() {
-  if (match) broadcast({ t: 'g', ...match.snapshot(ackOf) });
+  if (match) broadcast({ t: 'g', ...match.snapshot() });
 }
 
 let endAt = 0;
 function step() {
-  // Her oyuncu için sıradaki girdiyi uygula; kuyruk boşsa son girdi kısa süre devam eder
+  // Bağlantısı kopan ya da girdi göndermeyi kesen (sekmesi arka planda) oyuncunun tuşları bırakılmış sayılır
   const now = Date.now();
   for (const d of match.players.values()) {
     const p = players.get(d.id);
-    if (!p) continue;
-    if (!p.ws || now - (p.lastInputAt || 0) > 250) {
-      // Bağlantı yok ya da istemci girdi göndermeyi kesti (sekme arka planda): tuşlar bırakılmış sayılır
-      match.setInput(d.id, 0);
-      p.queue.length = 0;
-      continue;
-    }
-    // Uyarlamalı tampon: ağ dalgalanıp kuyruk boşalırsa bu oyuncu için daha çok girdi biriktirilir
-    // (tahmin bozulmasın), ağ sakinleşince tampon küçültülür (gecikme azalsın)
-    if (p.buf == null) {
-      p.buf = 2;
-      p.minQ = Infinity;
-      p.winAt = now;
-      p.starvedAt = 0;
-    }
-    const next = p.queue.shift();
-    if (next) {
-      p.ack = next[0];
-      match.setInput(d.id, next[1]);
-    } else {
-      p.buf = Math.min(6, p.buf + 1);
-      p.starvedAt = now;
-    }
-    p.minQ = Math.min(p.minQ, p.queue.length);
-    if (now - p.winAt > 2000) {
-      if (p.minQ >= 1 && now - p.starvedAt > 2000 && p.buf > 1) p.buf--;
-      p.minQ = Infinity;
-      p.winAt = now;
-    }
-    // Tamponu aşan fazlalık gecikme demektir; atılan girdideki vuruş basışı korunur
-    while (p.queue.length > p.buf) {
-      const drop = p.queue.shift();
-      p.queue[0][1] |= drop[1] & 16;
-    }
+    if (p && (!p.ws || now - (p.lastInputAt || 0) > 400)) match.setInput(d.id, 0);
   }
   const events = match.step();
   for (const ev of events) {
