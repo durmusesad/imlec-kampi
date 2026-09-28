@@ -7,6 +7,9 @@
   const INTERP_DELAY = 100; // ms — diğer imleçler bu kadar geriden çizilir
   const SEND_EVERY = 33; // ms (~30 Hz)
   const TICK = 1 / HB.TPS;
+  // Kendi girdimizi kaç adım geç uygulayalım: sunucudaki girdi tamponu kadar (2–5 adım, 33–83 ms).
+  // Böylece dünya daha az ileriye tahmin edilir; top/rakip ışınlanmaları büyük ölçüde kaybolur
+  let inputDelayTicks = 2;
 
   const canvas = document.getElementById('c');
   const ctx = canvas.getContext('2d', { alpha: false });
@@ -41,6 +44,7 @@
   let pending = []; // sunucunun henüz uygulamadığı kendi girdilerimiz [seq, bits]
   let prevPos = new Map(); // son adımdan önceki konumlar (kareler arası yumuşatma)
   const offsets = new Map(); // düzeltmelerde oluşan görsel sapma, zamanla sönümlenir
+  let corrStats = null; // yerel testte düzeltme istatistiği
 
   // Hızlı emoji menüsü (kişiye özel, tarayıcıda saklanır)
   let quick = store.get('imlec-kampi:hizli-emoji', null);
@@ -576,28 +580,44 @@
       return;
     }
     // Önceki sapmayı hariç tutarak ölç; yoksa sapma her güncellemede kendini tekrar ekleyip büyür
-    const before = renderPositions(1, true);
+    // Ekranda o an çizilen ara konuma (alpha) göre ölç ki düzeltme görsel olarak kesintisiz olsun
+    const alpha = Math.min(1, simAcc / TICK);
+    const before = renderPositions(alpha, true);
     sim.load(g);
     const mine = g.p.find((q) => q[0] === myId);
     if (mine) {
       const ack = mine[8];
+      // Sunucu tamponuna doğru her güncellemede en fazla 1 adım yaklaş (ani sıçrama olmasın)
+      const want = Math.max(2, Math.min(5, mine[9] || 2));
+      if (want > inputDelayTicks) inputDelayTicks++;
+      else if (want < inputDelayTicks) inputDelayTicks--;
       pending = pending.filter(([s]) => s > ack);
       if (pending.length > 90) pending = pending.slice(-90);
-      // Sunucunun henüz işlemediği girdilerimizi yeniden oynat: kendi diskimiz gecikmesiz görünür
-      for (const [, k] of pending) simStep(k);
-      if (!pending.length) prevPos = simPositions();
+      // Sunucunun henüz işlemediği girdilerimizi yeniden oynat. Son INPUT_DELAY girdi henüz oynatılmaz:
+      // dünya o kadar az ileriye tahmin edilir (rakip/top düzeltmeleri küçülür), karşılığında kendi
+      // tuşlarımız INPUT_DELAY adım geç görünür (HaxBall'daki giriş gecikmesi gibi)
+      const upto = Math.max(0, pending.length - inputDelay());
+      for (let i = 0; i < upto; i++) simStep(pending[i][1]);
+      if (!upto) prevPos = simPositions();
     } else {
       pending = [];
       prevPos = simPositions();
     }
     // Düzeltmeyi bir anda değil, birkaç karede yumuşakça uygula
-    const after = renderPositions(1, true);
+    const after = renderPositions(alpha, true);
     for (const [id, a] of after) {
       const b = before.get(id);
       if (!b) continue;
       const o = offsets.get(id) || { x: 0, y: 0 };
       o.x += b.x - a.x;
       o.y += b.y - a.y;
+      if (corrStats) {
+        const k = id === 'ball' ? 'ball' : id === myId ? 'me' : 'other';
+        const d = Math.hypot(b.x - a.x, b.y - a.y);
+        corrStats[k].sum += d;
+        if (d > 0.5) corrStats[k].n++;
+        corrStats[k].max = Math.max(corrStats[k].max, d);
+      }
       if (Math.hypot(o.x, o.y) > 60) { o.x = 0; o.y = 0; } // büyük sıçrama (gol, devre): direkt geç
       offsets.set(id, o);
     }
@@ -620,6 +640,10 @@
     return out;
   }
 
+  function inputDelay() {
+    return window.__inputDelay != null ? window.__inputDelay : inputDelayTicks;
+  }
+
   function advanceSim(dt) {
     if (!sim) return;
     const playing = inMatch() && sim.players.has(myId);
@@ -633,7 +657,8 @@
         seq++;
         pending.push([seq, k]);
         send({ t: 'i', s: seq, k });
-        simStep(k);
+        const d = inputDelay();
+        simStep(pending.length > d ? pending[pending.length - 1 - d][1] : null);
       } else simStep(null);
     }
     if (steps === 6) simAcc = 0; // sekme arka plandaydı: yetişmeye çalışma
@@ -740,6 +765,8 @@
       setLocked: (v) => { locked = v; updateModeUi(); },
       advance: (dt) => advanceSim(dt),
       get rp() { return lastRp; },
+      startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
+      get stats() { return corrStats; },
     };
   }
 

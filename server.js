@@ -356,7 +356,7 @@ setInterval(() => {
 // ---------- Maç döngüsü (60 Hz, otoriter) ----------
 function ackOf(id) {
   const p = players.get(id);
-  return p ? p.ack : 0;
+  return p ? [p.ack, p.buf || 2] : [0, 2];
 }
 
 function broadcastMatch() {
@@ -376,10 +376,32 @@ function step() {
       p.queue.length = 0;
       continue;
     }
+    // Uyarlamalı tampon: ağ dalgalanıp kuyruk boşalırsa bu oyuncu için daha çok girdi biriktirilir
+    // (tahmin bozulmasın), ağ sakinleşince tampon küçültülür (gecikme azalsın)
+    if (p.buf == null) {
+      p.buf = 2;
+      p.minQ = Infinity;
+      p.winAt = now;
+      p.starvedAt = 0;
+    }
     const next = p.queue.shift();
     if (next) {
       p.ack = next[0];
       match.setInput(d.id, next[1]);
+    } else {
+      p.buf = Math.min(6, p.buf + 1);
+      p.starvedAt = now;
+    }
+    p.minQ = Math.min(p.minQ, p.queue.length);
+    if (now - p.winAt > 2000) {
+      if (p.minQ >= 1 && now - p.starvedAt > 2000 && p.buf > 1) p.buf--;
+      p.minQ = Infinity;
+      p.winAt = now;
+    }
+    // Tamponu aşan fazlalık gecikme demektir; atılan girdideki vuruş basışı korunur
+    while (p.queue.length > p.buf) {
+      const drop = p.queue.shift();
+      p.queue[0][1] |= drop[1] & 16;
     }
   }
   const events = match.step();
@@ -411,7 +433,7 @@ setInterval(() => {
   while (match && nextTick <= now) {
     step();
     nextTick += TICK_MS;
-    if (match.tick % 2 === 0) broadcastDue = true; // 30 Hz tam durum; istemci aradakini tahmin eder
+    broadcastDue = true; // 60 Hz tam durum
   }
   if (!match) return;
   for (const p of players.values()) syncCursorToDisc(p);

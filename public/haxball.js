@@ -307,8 +307,8 @@
       const r = (v) => Math.round(v * 1000) / 1000;
       const p = [];
       for (const q of this.players.values()) {
-        p.push([q.id, q.team === 'red' ? 0 : 1, r(q.x), r(q.y), r(q.vx), r(q.vy), q.input, q.kickReady ? 1 : 0,
-          acks ? acks(q.id) : 0]);
+        const [ack, buf] = acks ? acks(q.id) : [0, 2];
+        p.push([q.id, q.team === 'red' ? 0 : 1, r(q.x), r(q.y), r(q.vx), r(q.vy), q.input, q.kickReady ? 1 : 0, ack, buf]);
       }
       const b = this.ball;
       return {
