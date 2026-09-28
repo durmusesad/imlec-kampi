@@ -91,6 +91,40 @@
   }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
 
+  #adminBar {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; align-items: center;
+  }
+  body:not(.paused) #adminBar { display: none; }
+  .btn2.small { padding: 6px 12px; font-size: 13px; white-space: nowrap; }
+  .btn2.ghost { background: transparent; box-shadow: none; }
+  #adminTools { display: flex; gap: 8px; align-items: center; }
+  #adminTools.hidden { display: none; }
+  #adminTools .tag { background: var(--ink); color: #ffe08a; padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+  #adminModal, #kickedScreen {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(40,30,20,.45);
+  }
+  #kickedScreen { background: rgba(40,30,20,.75); z-index: 10; }
+  #adminModal input {
+    width: 100%; font: inherit; font-size: 18px; padding: 10px 12px; border: 2px solid var(--ink); border-radius: 10px; outline: none;
+  }
+  #adminModal .err { color: #c62828; font-weight: 700; min-height: 20px; margin-top: 8px; font-size: 14px; }
+
+  /* Yönetici araçları oyuncu listesinde */
+  #players .mod { display: none; gap: 3px; margin-left: 4px; }
+  body.admin.paused #players .mod { display: inline-flex; }
+  #players .mod button {
+    border: 1.5px solid var(--ink); background: #fff; border-radius: 6px; font-size: 12px; padding: 1px 4px; cursor: pointer; line-height: 1.3;
+  }
+  #players .mod button:hover { background: #ffe3a3; }
+  #players .mod button.danger { background: #ffcdd2; }
+  #players .muted-ic { font-size: 12px; }
+  #players .menu { position: absolute; right: 100%; margin-right: 6px; background: var(--paper); border: 2px solid var(--ink);
+    border-radius: 10px; padding: 4px; display: flex; flex-direction: column; gap: 2px; box-shadow: 3px 3px 0 var(--ink); z-index: 5; }
+  #players .menu button { text-align: left; border: 0; background: transparent; font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  #players .menu button:hover { background: #ffe3a3; }
+  #players .row { position: relative; }
+  body.admin #players { min-width: 230px; }
+
   #emojiPanel {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(40,30,20,.35);
   }
@@ -214,6 +248,30 @@
     <button class="go" id="joinBtn">Katıl</button>
     <div class="help">Nehir seni sürükler, çamur yavaşlatır, buzda kayarsın.<br>Sahanın altındaki takım alanına tıkla, HaxBall maçı başlat!</div>
   </div>
+</div>
+
+<!-- Yönetici: oyun durunca altta görünür -->
+<div id="adminBar" class="hidden">
+  <button id="adminBtn" class="btn2 small">🛡️ Yönetici</button>
+  <span id="adminTools" class="hidden">
+    <span class="tag">👑 Yöneticisin · oyuncu listesinden sustur/at</span>
+    <button class="btn2 small" id="admStop">⏹ Maçı bitir</button>
+    <button class="btn2 small" id="admStart">▶ Maçı başlat</button>
+    <button class="btn2 small" id="admClear">🧹 Sohbeti temizle</button>
+    <button class="btn2 small ghost" id="admLogout">Çıkış</button>
+  </span>
+</div>
+<div id="adminModal" class="hidden">
+  <div class="card">
+    <h1 style="font-size:24px">🛡️ Yönetici girişi</h1>
+    <p>Yönetici şifresini gir.</p>
+    <input id="adminPw" type="password" autocomplete="current-password" placeholder="Şifre">
+    <div id="adminErr" class="err"></div>
+    <div class="row2" style="margin-top:14px"><button class="btn2" id="adminCancel">Vazgeç</button><button class="go" id="adminLogin">Giriş</button></div>
+  </div>
+</div>
+<div id="kickedScreen" class="hidden">
+  <div class="card"><h1>👢</h1><p style="margin:0 0 16px">Yönetici seni oyundan çıkardı.</p><button class="go" onclick="location.reload()">Tekrar gir</button></div>
 </div>
 
 <div id="emojiPanel" class="hidden">

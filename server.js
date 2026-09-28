@@ -2,6 +2,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const WORLD = require('./public/world.js');
 const { Match } = require('./public/haxball.js');
@@ -52,7 +53,134 @@ const HAX = WORLD.HAX;
 const RECONNECT_GRACE = 15000; // kopan oyuncunun geri dönmesi için süre (ms)
 const players = new Map(); // id -> oyuncu
 const scores = {}; // id -> atılan gol
-const chatLog = []; // son mesajlar (yeni gelenler de görsün)
+let chatLog = []; // son mesajlar (yeni gelenler de görsün)
+
+// ---------- Yönetici ----------
+// Şifre koda değil ortam değişkenine konur (Cloud Run ayarı). Tanımlı değilse yönetici girişi kapalıdır.
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+// Tarayıcıda saklanan anahtar şifreden türetilir: sunucu yeniden başlasa da geçerli kalır, şifre değişirse geçersizleşir
+const adminKey = ADMIN_PASSWORD
+  ? crypto.createHmac('sha256', ADMIN_PASSWORD).update('imlec-kampi-yonetici').digest('hex')
+  : null;
+const mutes = new Map(); // oyuncu anahtarı (token) ya da id -> susturma bitişi (ms, Infinity = kalıcı)
+let adminFails = []; // tüm sitedeki başarısız şifre denemeleri (kaba kuvvete karşı)
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a)), y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function muteKey(p) {
+  return p.token || 'id:' + p.id;
+}
+
+function mutedUntil(p) {
+  const until = mutes.get(muteKey(p));
+  if (!until) return 0;
+  if (until !== Infinity && until < Date.now()) {
+    mutes.delete(muteKey(p));
+    return 0;
+  }
+  return until;
+}
+
+// İsimle oyuncu bul: tam eşleşme, yoksa tek bir önek eşleşmesi
+function findPlayer(name) {
+  const q = String(name || '').toLocaleLowerCase('tr');
+  if (!q) return null;
+  const live = [...players.values()].filter((p) => p.ws);
+  const exact = live.filter((p) => p.name.toLocaleLowerCase('tr') === q);
+  if (exact.length === 1) return exact[0];
+  const pre = live.filter((p) => p.name.toLocaleLowerCase('tr').startsWith(q));
+  return pre.length === 1 ? pre[0] : null;
+}
+
+// Moderasyon işlemleri; sonuç metni yöneticiye bildirilir
+function moderate(admin, action, target, minutes) {
+  if (['mute', 'unmute', 'kick', 'spec'].includes(action)) {
+    if (!target) return 'Oyuncu bulunamadı (isim tam ya da tek anlamlı olmalı).';
+    if (target === admin) return 'Kendine uygulayamazsın.';
+  }
+  switch (action) {
+    case 'mute': {
+      const m = Number(minutes);
+      const until = m > 0 ? Date.now() + Math.min(m, 1440) * 60000 : Infinity;
+      mutes.set(muteKey(target), until);
+      const len = until === Infinity ? 'kalıcı olarak' : `${Math.round(Math.min(m, 1440))} dakika`;
+      notice(target, `Yönetici seni ${len} susturdu.`);
+      broadcast({ t: 'notice', text: `${target.name} ${len} susturuldu.` });
+      broadcastMuted();
+      return null;
+    }
+    case 'unmute':
+      mutes.delete(muteKey(target));
+      notice(target, 'Susturman kaldırıldı.');
+      broadcastMuted();
+      return `${target.name} artık konuşabilir.`;
+    case 'kick':
+      // Tek seferlik: bağlantı kesilir, kişi sayfayı yenileyip yeniden girebilir
+      send(target.ws, { t: 'kicked' });
+      broadcast({ t: 'notice', text: `${target.name} yönetici tarafından atıldı.` }, target.id);
+      removePlayer(target);
+      try { target.ws.close(4001, 'atildi'); } catch {}
+      return null;
+    case 'spec':
+      if (!target.team) return `${target.name} zaten bir takımda değil.`;
+      setTeam(target, null);
+      notice(target, 'Yönetici seni izleyiciye aldı.');
+      return `${target.name} izleyiciye alındı.`;
+    case 'stop':
+      if (!match) return 'Şu an maç yok.';
+      broadcast({ t: 'notice', text: 'Yönetici maçı bitirdi.' });
+      stopMatch();
+      return null;
+    case 'start':
+      if (match) return 'Maç zaten sürüyor.';
+      if (!teamIds('red').length || !teamIds('blue').length) return 'Her takımda en az 1 oyuncu olmalı.';
+      startMatch();
+      return null;
+    case 'clearchat':
+      chatLog = [];
+      broadcast({ t: 'clearChat' });
+      broadcast({ t: 'notice', text: 'Yönetici sohbeti temizledi.' });
+      return null;
+  }
+  return 'Bilinmeyen işlem.';
+}
+
+// Susturulmuş oyuncular listesi (sadece yöneticiler için)
+function broadcastMuted() {
+  const ids = [...players.values()].filter((p) => p.ws && mutedUntil(p)).map((p) => p.id);
+  for (const p of players.values()) if (p.admin) send(p.ws, { t: 'muted', ids });
+}
+
+// Sohbet komutları: /sustur isim [dk], /coz isim, /at isim, /izleyici isim, /bitir, /baslat, /temizle
+function chatCommand(me, text) {
+  const [cmd, ...args] = text.slice(1).trim().split(/\s+/);
+  const c = (cmd || '').toLocaleLowerCase('tr');
+  if (!me.admin) {
+    notice(me, 'Komutlar sadece yönetici içindir.');
+    return;
+  }
+  let action, target = null, minutes = 0;
+  const map = { sustur: 'mute', coz: 'unmute', çöz: 'unmute', at: 'kick', izleyici: 'spec', bitir: 'stop', baslat: 'start', başlat: 'start', temizle: 'clearchat' };
+  action = map[c];
+  if (!action) {
+    notice(me, 'Komutlar: /sustur isim [dk] · /coz isim · /at isim · /izleyici isim · /bitir · /baslat · /temizle');
+    return;
+  }
+  if (['mute', 'unmute', 'kick', 'spec'].includes(action)) {
+    // İsim birden çok kelime olabilir; susturmada son argüman sayıysa süredir
+    let nameArgs = args;
+    if (action === 'mute' && args.length > 1 && /^\d+$/.test(args[args.length - 1])) {
+      minutes = +args[args.length - 1];
+      nameArgs = args.slice(0, -1);
+    }
+    target = findPlayer(nameArgs.join(' '));
+  }
+  const res = moderate(me, action, target, minutes);
+  if (res) notice(me, res);
+}
 let nextId = 1;
 let match = null; // yürüyen HaxBall maçı
 let matchStartedAt = 0;
@@ -72,7 +200,7 @@ function notice(p, text) {
 }
 
 function publicPlayer(p) {
-  return { id: p.id, name: p.name, color: p.color, x: p.x, y: p.y, afk: !!p.afk, typing: !!p.typing };
+  return { id: p.id, name: p.name, color: p.color, x: p.x, y: p.y, afk: !!p.afk, typing: !!p.typing, admin: !!p.admin };
 }
 
 function clamp(v, a, b) {
@@ -226,6 +354,7 @@ wss.on('connection', (ws) => {
       }
       me.name = cleanText(m.name, 16) || 'İsimsiz';
       me.color = WORLD.COLORS.includes(m.color) ? m.color : WORLD.COLORS[0];
+      me.admin = !!(adminKey && typeof m.adminKey === 'string' && safeEqual(m.adminKey, adminKey));
       send(ws, {
         t: 'welcome',
         id: me.id,
@@ -233,8 +362,10 @@ wss.on('connection', (ws) => {
         players: [...players.values()].filter((p) => p.ws).map(publicPlayer),
         scores,
         chat: chatLog,
+        admin: me.admin,
       });
       send(ws, lobbyState());
+      if (me.admin) broadcastMuted();
       if (match) send(ws, { t: 'g', ...match.snapshot(ackOf) });
       broadcast({ t: 'join', p: publicPlayer(me) }, me.id); // geri dönende isim/renk değişmiş olabilir
       return;
@@ -287,6 +418,42 @@ wss.on('connection', (ws) => {
         broadcast({ t: 'status', id: me.id, afk, typing }, me.id);
         break;
       }
+      case 'admin': {
+        // Şifreyle yönetici girişi
+        if (!adminKey) {
+          send(ws, { t: 'adminFail', text: 'Yönetici girişi bu sunucuda kapalı.' });
+          return;
+        }
+        const now = Date.now();
+        adminFails = adminFails.filter((t) => now - t < 60000);
+        // Kişi başı dakikada 5, sitenin tamamında dakikada 10 yanlış deneme: kısa şifre de tahminle kırılamasın
+        if (!allow(me, 'admin', 5, 60000) || adminFails.length >= 10) {
+          send(ws, { t: 'adminFail', text: 'Çok fazla deneme yapıldı, bir dakika bekle.' });
+          return;
+        }
+        if (typeof m.pw !== 'string' || !safeEqual(m.pw, ADMIN_PASSWORD)) {
+          adminFails.push(now);
+          send(ws, { t: 'adminFail', text: 'Şifre yanlış.' });
+          return;
+        }
+        me.admin = true;
+        send(ws, { t: 'adminOk', key: adminKey });
+        broadcast({ t: 'join', p: publicPlayer(me) }, me.id); // taç herkese görünsün
+        broadcastMuted();
+        break;
+      }
+      case 'adminLogout': {
+        me.admin = false;
+        broadcast({ t: 'join', p: publicPlayer(me) }, me.id);
+        break;
+      }
+      case 'mod': {
+        if (!me.admin) return;
+        const target = num(m.id) ? players.get(m.id) : null;
+        const res = moderate(me, String(m.action || ''), target && target.ws ? target : null, m.minutes);
+        if (res) notice(me, res);
+        break;
+      }
       case 'bye': {
         // Kullanıcı sayfadan ayrılıyor
         removePlayer(me);
@@ -297,6 +464,16 @@ wss.on('connection', (ws) => {
       case 'chat': {
         const text = cleanText(m.text, WORLD.CHAT_MAX);
         if (!text) return;
+        if (text.startsWith('/')) {
+          chatCommand(me, text);
+          return;
+        }
+        const mu = mutedUntil(me);
+        if (mu) {
+          const left = mu === Infinity ? '' : ` (${Math.ceil((mu - Date.now()) / 60000)} dk kaldı)`;
+          notice(me, `Susturuldun, mesajın kimseye gitmedi${left}.`);
+          return;
+        }
         if (!allow(me, 'chat', 4, 4000)) {
           notice(me, 'Çok hızlı yazıyorsun, biraz bekle.');
           return;
@@ -308,12 +485,12 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'ping': {
-        if (!num(m.x) || !num(m.y) || !allow(me, 'ping', 4, 1000)) return;
+        if (!num(m.x) || !num(m.y) || !allow(me, 'ping', 4, 1000) || mutedUntil(me)) return;
         broadcast({ t: 'ping', id: me.id, x: clamp(m.x, 0, WORLD.W), y: clamp(m.y, 0, WORLD.H) }, me.id);
         break;
       }
       case 'emote': {
-        if (WORLD.EMOJI_PALETTE.includes(m.e) && allow(me, 'emote', 4, 1500)) {
+        if (WORLD.EMOJI_PALETTE.includes(m.e) && allow(me, 'emote', 4, 1500) && !mutedUntil(me)) {
           broadcast({ t: 'emote', id: me.id, e: m.e }, me.id);
         }
         break;

@@ -52,6 +52,9 @@
     quick = W.DEFAULT_QUICK.slice();
   }
   let radial = null; // {vx, vy, sel} — açıkken fare hareketi seçimi yönlendirir
+  let isAdmin = false;
+  let mutedIds = new Set(); // (yönetici) susturulmuş oyuncular
+  let kicked = false;
 
   // Yeniden bağlanınca aynı oyuncu olarak dönebilmek için sekmeye özel anahtar
   let token = null;
@@ -107,6 +110,7 @@
   }
   function updateModeUi() {
     document.body.classList.toggle('normal', joined && !locked);
+    $('adminBar').classList.toggle('hidden', !joined || kicked);
     // Oyun durdu: tuş tablosunun tamamı ekranın ortasında görünür (emoji paneli açıkken değil)
     document.body.classList.toggle('paused', joined && !locked && $('emojiPanel').classList.contains('hidden'));
     sendStatus();
@@ -396,7 +400,7 @@
     ws = new WebSocket(`${proto}://${location.host}`);
     ws.onopen = () => {
       retries = 0;
-      ws.send(JSON.stringify({ t: 'join', name: me.name, color: me.color, x: me.x, y: me.y, token }));
+      ws.send(JSON.stringify({ t: 'join', name: me.name, color: me.color, x: me.x, y: me.y, token, adminKey: store.get('imlec-kampi:yonetici', null) }));
     };
     ws.onmessage = (ev) => {
       let m;
@@ -405,6 +409,7 @@
     };
     ws.onclose = () => {
       connected = false;
+      if (kicked) return; // atılan kişi otomatik geri bağlanmaz
       const delay = Math.min(5000, 300 * Math.pow(2, retries++));
       setStatus('Bağlantı koptu, yeniden bağlanılıyor…');
       setTimeout(connect, delay);
@@ -431,7 +436,7 @@
       id: p.id, name: p.name, color: p.color,
       snaps: [{ t: performance.now(), x: p.x, y: p.y }],
       chat: old ? old.chat : null, emote: old ? old.emote : null,
-      afk: !!p.afk, typing: !!p.typing,
+      afk: !!p.afk, typing: !!p.typing, admin: !!p.admin,
     });
   }
 
@@ -450,6 +455,8 @@
       case 'welcome':
         myId = m.id;
         connected = true;
+        setAdmin(!!m.admin);
+        if (!m.admin) store.set('imlec-kampi:yonetici', null); // eski/geçersiz anahtar
         setStatus('');
         players.clear();
         for (const p of m.players) addPlayer(p);
@@ -544,6 +551,29 @@
       }
       case 'full':
         setStatus('Oda dolu, biraz sonra tekrar dene.');
+        break;
+      case 'adminOk':
+        store.set('imlec-kampi:yonetici', m.key);
+        setAdmin(true);
+        closeAdminModal(false);
+        toast('Yönetici girişi yapıldı 👑');
+        break;
+      case 'adminFail':
+        $('adminErr').textContent = m.text;
+        $('adminPw').select();
+        break;
+      case 'muted':
+        mutedIds = new Set(m.ids);
+        renderPlayerList();
+        break;
+      case 'kicked':
+        kicked = true;
+        document.exitPointerLock();
+        $('kickedScreen').classList.remove('hidden');
+        updateModeUi();
+        break;
+      case 'clearChat':
+        $('chatlog').querySelectorAll('.line').forEach((n) => n.remove());
         break;
     }
   }
@@ -732,6 +762,93 @@
     el.classList.toggle('hidden', !g);
   }
 
+  // ---------- Yönetici ----------
+  function setAdmin(v) {
+    isAdmin = v;
+    document.body.classList.toggle('admin', v);
+    $('adminBtn').classList.toggle('hidden', v);
+    $('adminTools').classList.toggle('hidden', !v);
+    const self = players.get(myId);
+    if (self) self.admin = v;
+    renderPlayerList();
+  }
+  function openAdminModal() {
+    $('adminErr').textContent = '';
+    $('adminPw').value = '';
+    $('adminModal').classList.remove('hidden');
+    $('adminPw').focus();
+  }
+  function closeAdminModal(resume) {
+    $('adminModal').classList.add('hidden');
+    if (resume) requestLock();
+  }
+  $('adminBtn').onclick = openAdminModal;
+  $('adminCancel').onclick = () => closeAdminModal(false);
+  $('adminLogin').onclick = () => {
+    const pw = $('adminPw').value;
+    if (pw) send({ t: 'admin', pw });
+  };
+  $('adminPw').addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') $('adminLogin').click();
+    if (e.key === 'Escape') closeAdminModal(false);
+  });
+  $('admStop').onclick = () => send({ t: 'mod', action: 'stop' });
+  $('admStart').onclick = () => send({ t: 'mod', action: 'start' });
+  $('admClear').onclick = () => send({ t: 'mod', action: 'clearchat' });
+  $('admLogout').onclick = () => {
+    store.set('imlec-kampi:yonetici', null);
+    send({ t: 'adminLogout' });
+    setAdmin(false);
+    toast('Yönetici çıkışı yapıldı');
+  };
+
+  let openMenu = null;
+  function closeMenu() {
+    if (openMenu) openMenu.remove();
+    openMenu = null;
+  }
+  document.addEventListener('click', (e) => {
+    if (openMenu && !openMenu.contains(e.target) && !e.target.closest('.mod')) closeMenu();
+  });
+
+  // Oyuncu satırındaki yönetici butonları: sustur (süre menüsü), izleyiciye al, at (iki tık onay)
+  function modButtons(p, team) {
+    const box = document.createElement('span');
+    box.className = 'mod';
+    const btn = (label, title, fn) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.title = title;
+      b.onclick = (e) => { e.stopPropagation(); fn(b); };
+      box.appendChild(b);
+      return b;
+    };
+    btn(mutedIds.has(p.id) ? '🔈' : '🔇', mutedIds.has(p.id) ? 'Susturmayı kaldır' : 'Sustur', (b) => {
+      if (mutedIds.has(p.id)) return send({ t: 'mod', action: 'unmute', id: p.id });
+      closeMenu();
+      const menu = document.createElement('div');
+      menu.className = 'menu';
+      for (const [txt, min] of [['1 dakika', 1], ['5 dakika', 5], ['30 dakika', 30], ['Kalıcı', 0]]) {
+        const it = document.createElement('button');
+        it.textContent = '🔇 ' + txt;
+        it.onclick = (e) => { e.stopPropagation(); send({ t: 'mod', action: 'mute', id: p.id, minutes: min }); closeMenu(); };
+        menu.appendChild(it);
+      }
+      b.closest('.row').appendChild(menu);
+      openMenu = menu;
+    });
+    if (team) btn('👁', 'İzleyiciye al', () => send({ t: 'mod', action: 'spec', id: p.id }));
+    btn('👢', 'Siteden at', (b) => {
+      // İki tıkla onay (tarayıcı diyaloğu kullanmadan)
+      if (b.classList.contains('danger')) return send({ t: 'mod', action: 'kick', id: p.id });
+      b.classList.add('danger');
+      b.textContent = 'Emin misin?';
+      setTimeout(() => { if (b.isConnected) { b.classList.remove('danger'); b.textContent = '👢'; } }, 3000);
+    });
+    return box;
+  }
+
   function renderPlayerList() {
     const list = $('plist');
     list.innerHTML = '';
@@ -750,11 +867,20 @@
       if (team) dot.style.boxShadow = `0 0 0 2px ${H.teams[team].color}`;
       const nm = document.createElement('span');
       nm.className = 'name';
-      nm.textContent = p.name + (p.id === myId ? ' (sen)' : '');
+      nm.textContent = (p.admin ? '👑 ' : '') + p.name + (p.id === myId ? ' (sen)' : '');
       const g = document.createElement('span');
       g.className = 'goals';
       g.textContent = '⚽ ' + (scores[p.id] || 0);
-      row.append(dot, nm, g);
+      row.append(dot, nm);
+      if (isAdmin && mutedIds.has(p.id)) {
+        const mi = document.createElement('span');
+        mi.className = 'muted-ic';
+        mi.textContent = '🔇';
+        mi.title = 'Susturuldu';
+        row.append(mi);
+      }
+      row.append(g);
+      if (isAdmin && p.id !== myId) row.append(modButtons(p, team));
       list.appendChild(row);
     }
   }
@@ -1325,7 +1451,7 @@
 
     // İsim etiketi
     ctx.font = 'bold 12px Nunito, Trebuchet MS, sans-serif';
-    const label = p.name;
+    const label = (p.admin ? '👑 ' : '') + p.name;
     const tw = ctx.measureText(label).width;
     const lx = 10, ly = 34;
     ctx.fillStyle = p.color;
@@ -1563,8 +1689,9 @@
     ctx.font = `bold ${Math.round(9 * S)}px Arial, sans-serif`;
     ctx.strokeStyle = 'rgba(0,0,0,0.6)';
     ctx.lineWidth = 3;
-    ctx.strokeText(pl.name, d.x, d.y + r + 12);
-    ctx.fillText(pl.name, d.x, d.y + r + 12);
+    const nm = (pl.admin ? '👑 ' : '') + pl.name;
+    ctx.strokeText(nm, d.x, d.y + r + 12);
+    ctx.fillText(nm, d.x, d.y + r + 12);
     ctx.save();
     ctx.translate(d.x - 6, d.y - r + 4);
     drawSocial(pl, time);
