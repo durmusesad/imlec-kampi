@@ -32,7 +32,6 @@
   let lobby = { red: [], blue: [], running: false, last: null };
   const ball = { x: H.cx, y: H.cy };
   const keys = new Set();
-  const pings = [];
   const cam = { x: 0, y: 0, init: false };
   let vw = innerWidth, vh = innerHeight, dpr = 1;
 
@@ -188,14 +187,13 @@
       return;
     }
     if (inMatch()) return;
+    // Sol tık sadece etkileşimli alanlarda bir şey yapar (boş yere tıklamak hiçbir şey göndermez)
     for (const [name, pad] of Object.entries(W.PADS)) {
       if (W.inRect(me.x, me.y, pad)) {
         send({ t: 'pad', pad: name });
         return;
       }
     }
-    addPing(me.x, me.y, me.color);
-    send({ t: 'ping', x: me.x, y: me.y });
   });
   document.addEventListener('mouseup', (e) => {
     if (e.button === 2 && radial) pickRadial();
@@ -526,11 +524,6 @@
         showChat(m.id, m.text);
         addChatLine(m);
         break;
-      case 'ping': {
-        const p = players.get(m.id);
-        addPing(m.x, m.y, p ? p.color : '#fff');
-        break;
-      }
       case 'emote':
         showEmote(m.id, m.e);
         break;
@@ -708,9 +701,6 @@
   function showEmote(id, e) {
     const p = players.get(id);
     if (p) p.emote = { e, start: performance.now() };
-  }
-  function addPing(x, y, color) {
-    pings.push({ x, y, color, start: performance.now() });
   }
 
   let goalTimer = null;
@@ -1359,27 +1349,6 @@
     ctx.fillText('Takım alanına tıkla, hazır ol · Başlat’a tıkla, maç başlasın', 1000, 1098);
   }
 
-  function drawPings(time) {
-    for (let i = pings.length - 1; i >= 0; i--) {
-      const p = pings[i];
-      const k = (time - p.start) / 900;
-      if (k >= 1) { pings.splice(i, 1); continue; }
-      const e = 1 - Math.pow(1 - k, 3);
-      ctx.globalAlpha = 1 - k;
-      ctx.strokeStyle = p.color;
-      ctx.lineWidth = 6 * (1 - k) + 1;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 8 + e * 60, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.strokeStyle = INK;
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, 8 + e * 60 + 4, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    ctx.globalAlpha = 1;
-  }
-
   const ARROW = [[0, 0], [0, 23], [5.5, 18], [9.5, 27], [13.5, 25.5], [9.5, 16.5], [16.5, 16.5]];
   function arrowPath() {
     ctx.beginPath();
@@ -1818,7 +1787,6 @@
     drawWater(time);
     drawPads(time);
     drawMatch(time, rp);
-    drawPings(time);
 
     const rt = time - INTERP_DELAY;
     for (const p of players.values()) {

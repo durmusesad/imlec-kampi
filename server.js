@@ -390,7 +390,7 @@ wss.on('connection', (ws) => {
       }
       case 'pad': {
         const pad = WORLD.PADS[m.pad];
-        if (!pad || !onPad(me, pad)) return;
+        if (!pad || !onPad(me, pad) || !allow(me, 'pad', 3, 1000)) return; // makroyla seri tıklamaya karşı
         if (m.pad === 'red' || m.pad === 'blue') {
           setTeam(me, me.team === m.pad ? null : m.pad); // aynı alana tekrar tıklamak takımdan çıkarır
         } else if (m.pad === 'start') {
@@ -483,11 +483,6 @@ wss.on('connection', (ws) => {
         chatLog.push(msg);
         if (chatLog.length > 40) chatLog.shift();
         broadcast(msg);
-        break;
-      }
-      case 'ping': {
-        if (!num(m.x) || !num(m.y) || !allow(me, 'ping', 4, 1000) || mutedUntil(me)) return;
-        broadcast({ t: 'ping', id: me.id, x: clamp(m.x, 0, WORLD.W), y: clamp(m.y, 0, WORLD.H) }, me.id);
         break;
       }
       case 'emote': {
