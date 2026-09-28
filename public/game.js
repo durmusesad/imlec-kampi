@@ -86,7 +86,7 @@
     joined = true;
     $('join').classList.add('hidden');
     ['players', 'keys', 'chatlog'].forEach((id) => $(id).classList.remove('hidden'));
-    $('keys').classList.toggle('min', !!store.get('imlec-kampi:kisayol-gizli', false));
+    flashKeys();
     connect();
     requestLock();
     updateModeUi();
@@ -102,8 +102,32 @@
     } catch {}
   }
   function updateModeUi() {
-    $('normal').classList.toggle('hidden', !joined || locked || !$('emojiPanel').classList.contains('hidden'));
     document.body.classList.toggle('normal', joined && !locked);
+    // Oyun durdu: tuş tablosunun tamamı ekranın ortasında görünür (emoji paneli açıkken değil)
+    document.body.classList.toggle('paused', joined && !locked && $('emojiPanel').classList.contains('hidden'));
+    sendStatus();
+  }
+
+  // Tuş rehberi: kısa süre görünüp kaybolur (girişte, maça girip çıkınca, H ile)
+  let keysTimer = null;
+  function flashKeys(ms = 6000) {
+    const el = $('keys');
+    el.classList.add('show');
+    clearTimeout(keysTimer);
+    keysTimer = setTimeout(() => el.classList.remove('show'), ms);
+  }
+
+  // Durumumu diğerlerine bildir: uzakta (oyun durdu / sekme arka planda) ya da yazıyor
+  let sentStatus = '';
+  function sendStatus(force) {
+    const afk = joined && (!locked || document.hidden);
+    const typing = chatting && !afk;
+    const self = players.get(myId);
+    if (self) { self.afk = afk; self.typing = typing; }
+    const key = afk + '|' + typing;
+    if (!force && key === sentStatus) return;
+    sentStatus = key;
+    send({ t: 'status', afk, typing });
   }
   document.addEventListener('pointerlockchange', () => {
     locked = document.pointerLockElement === canvas;
@@ -204,7 +228,10 @@
     }
   }
   addEventListener('blur', releaseAll);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) releaseAll();
+    sendStatus();
+  });
 
   document.addEventListener('keydown', (e) => {
     if (!joined || chatting || !locked) return; // normal modda tuşlar siteye gitmez
@@ -230,11 +257,9 @@
       case 'KeyE':
         openEmojiPanel();
         return;
-      case 'KeyH': {
-        const min = $('keys').classList.toggle('min');
-        store.set('imlec-kampi:kisayol-gizli', min);
+      case 'KeyH':
+        flashKeys();
         return;
-      }
     }
     const n = /^Digit([1-8])$/.exec(e.code);
     if (n) sendEmote(quick[+n[1] - 1]);
@@ -251,6 +276,7 @@
     chatInput.value = '';
     updateCounter();
     chatInput.focus();
+    sendStatus();
   }
   function closeChat() {
     if (!chatting) return;
@@ -258,6 +284,7 @@
     chatInput.blur();
     $('chatbox').classList.add('hidden');
     $('chatlog').classList.remove('open');
+    sendStatus();
   }
   function updateCounter() {
     const n = [...chatInput.value].length;
@@ -400,6 +427,7 @@
       id: p.id, name: p.name, color: p.color,
       snaps: [{ t: performance.now(), x: p.x, y: p.y }],
       chat: old ? old.chat : null, emote: old ? old.emote : null,
+      afk: !!p.afk, typing: !!p.typing,
     });
   }
 
@@ -428,6 +456,7 @@
           for (const c of m.chat || []) addChatLine(c, true);
         }
         renderPlayerList();
+        sendStatus(true);
         break;
       case 'join':
         addPlayer(m.p);
@@ -449,8 +478,10 @@
         }
         break;
       case 'lobby': {
+        const wasIn = inMatch();
         lobby = m;
         document.body.classList.toggle('in-match', inMatch());
+        if (wasIn !== inMatch()) flashKeys(); // maça girince/çıkınca ilgili tuşları kısaca göster
         if (!m.running) resetMatchView();
         keys.clear();
         renderPlayerList();
@@ -491,6 +522,11 @@
       case 'emote':
         showEmote(m.id, m.e);
         break;
+      case 'status': {
+        const p = players.get(m.id);
+        if (p) { p.afk = m.afk; p.typing = m.typing; }
+        break;
+      }
       case 'goal': {
         scores = m.scores || scores;
         renderPlayerList();
@@ -1277,6 +1313,8 @@
 
   // Sohbet balonu ve emoji (ctx, imlecin/diskin tepesine taşınmış olmalı)
   function drawSocial(p, time) {
+    if (p.afk) drawZzz(time);
+    else if (p.typing && !(p.chat && time < p.chat.until)) drawTyping(time);
     // Sohbet balonu
     if (p.chat && time < p.chat.until) {
       ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
@@ -1321,6 +1359,56 @@
         ctx.globalAlpha = 1;
       }
     }
+  }
+
+  // Uzakta: imlecin sağ üstünde yükselen, hafifçe salınan "zZz"
+  function drawZzz(time) {
+    const t = time / 1000;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    const sizes = [15, 21, 30];
+    for (let i = 0; i < 3; i++) {
+      const x = 26 + i * 15 + Math.sin(t * 1.6 + i) * 1.5;
+      const y = -8 - i * 16 + Math.sin(t * 2.2 + i * 1.3) * 2;
+      ctx.globalAlpha = 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(t * 2.4 - i * 0.9));
+      ctx.font = `900 ${sizes[i]}px Nunito, Trebuchet MS, sans-serif`;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.strokeText('z', x, y);
+      ctx.fillStyle = '#2f56d6';
+      ctx.fillText(i === 2 ? 'Z' : 'z', x, y);
+    }
+    ctx.restore();
+  }
+
+  // Yazıyor: üç noktası zıplayan küçük balon
+  function drawTyping(time) {
+    const t = time / 1000;
+    const bx = 6, by = -38, w = 46, h = 26;
+    ctx.save();
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    roundRect(ctx, bx, by, w, h, 12);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(bx + 10, by + h - 1);
+    ctx.lineTo(bx + 4, by + h + 8);
+    ctx.lineTo(bx + 20, by + h - 1);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = INK;
+    for (let i = 0; i < 3; i++) {
+      const jump = Math.max(0, Math.sin(t * 7 - i * 0.8)) * 4;
+      ctx.globalAlpha = 0.45 + 0.55 * (jump / 4);
+      ctx.beginPath();
+      ctx.arc(bx + 12 + i * 11, by + h / 2 - jump, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   function wrap(text, maxW) {

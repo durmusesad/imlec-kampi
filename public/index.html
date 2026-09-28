@@ -82,11 +82,6 @@
   #chatlog .line.old { opacity: 0; }
   #chatlog.open .line.old { opacity: .85; }
 
-  #normal {
-    position: fixed; top: 58px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff8ec;
-    padding: 8px 16px; border-radius: 999px; font-size: 14px; font-weight: 700; pointer-events: none;
-    box-shadow: 3px 3px 0 rgba(0,0,0,.2); white-space: nowrap;
-  }
   body.normal #c { filter: saturate(.55) brightness(.92); }
 
   #toast {
@@ -136,15 +131,23 @@
   kbd.wide { min-width: 64px; }
   kbd.mouse { padding: 0 7px; }
   #keys .lbl { font-weight: 700; white-space: nowrap; }
-  #keys .mode-match { display: none; }
-  body.in-match #keys .mode-lobby { display: none; }
-  body.in-match #keys .mode-match { display: grid; }
-  #keys.min .grid, #keys.min h4 .t { display: none !important; }
-  #keys.min { padding: 6px 10px; }
-  #keys.min h4 { margin: 0; }
-  body.normal #keys { opacity: .45; }
-  #keys .show-t { display: none; }
-  #keys.min .show-t { display: inline; }
+  /* Kısa süre görünür; oyun durunca ortada tam tablo */
+  #keys { opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity .35s, transform .35s; }
+  #keys.show { opacity: 1; transform: none; }
+  #keys h5, #keys .paused-title, #keys .resume { display: none; }
+  body:not(.in-match) #keys .sec-match, body.in-match #keys .sec-lobby { display: none; }
+  body.paused #keys {
+    opacity: 1; left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%); padding: 18px 22px 16px;
+    font-size: 14px; box-shadow: 5px 5px 0 var(--ink); transition: none;
+  }
+  body.paused #keys .sec-lobby, body.paused #keys .sec-match { display: block; }
+  body.paused #keys h5, body.paused #keys .resume { display: block; }
+  body.paused #keys .paused-title { display: block; margin: 0 0 6px; font-size: 26px; font-weight: 900; text-align: center; }
+  body.paused #keys h4 .again { display: none; }
+  #keys .cols { display: flex; gap: 28px; }
+  #keys h5 { margin: 4px 0 8px; font-size: 13px; }
+  #keys .resume { margin: 14px 0 0; text-align: center; font-size: 15px; }
+  #keys .resume b { color: var(--accent); }
 
   #score {
     position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px;
@@ -174,29 +177,32 @@
 <div id="players" class="hidden"><h3>Oyuncular</h3><div id="plist"></div></div>
 <div id="status" class="hidden"></div>
 <div id="keys" class="hidden">
-  <h4><span class="t mode-lobby-t">Kısayollar</span><span><kbd>H</kbd> <span class="t">gizle</span><span class="show-t">kısayollar</span></span></h4>
-  <div class="grid mode-lobby">
+  <p class="paused-title">Oyun durdu</p>
+  <h4><span>Kısayollar</span><span class="again"><kbd>H</kbd> tekrar göster</span></h4>
+  <div class="cols">
+  <section class="sec-lobby"><h5>Gezinti</h5><div class="grid">
     <span class="k"><kbd class="mouse">Tık</kbd></span><span class="lbl">Ping at · alanı seç</span>
     <span class="k"><kbd class="mouse">Sağ tık</kbd></span><span class="lbl">Emoji menüsü</span>
     <span class="k"><kbd>1</kbd><span class="or">–</span><kbd>8</kbd></span><span class="lbl">Hızlı emoji</span>
     <span class="k"><kbd>E</kbd></span><span class="lbl">Emojileri düzenle</span>
     <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
-    <span class="k"><kbd>Q</kbd></span><span class="lbl">Normal imleç</span>
-  </div>
-  <div class="grid mode-match">
+    <span class="k"><kbd>Q</kbd></span><span class="lbl">Oyunu durdur (normal imleç)</span>
+  </div></section>
+  <section class="sec-match"><h5>Maç</h5><div class="grid">
     <span class="k"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="lbl">Hareket (oklar da olur)</span>
     <span class="k"><kbd class="wide">Space</kbd></span><span class="lbl">Vuruş (topa değerken)</span>
     <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
     <span class="k"><kbd>1</kbd><span class="or">–</span><kbd>8</kbd></span><span class="lbl">Hızlı emoji</span>
     <span class="k"><kbd>L</kbd></span><span class="lbl">Maçtan çık</span>
-    <span class="k"><kbd>Q</kbd></span><span class="lbl">Normal imleç</span>
+    <span class="k"><kbd>Q</kbd></span><span class="lbl">Oyunu durdur (normal imleç)</span>
+  </div></section>
   </div>
+  <p class="resume">Devam etmek için sahaya <b>çift tıkla</b></p>
 </div>
 <div id="chatlog" class="hidden"></div>
 <div id="chatbox" class="hidden"><input id="chat" placeholder="Mesaj yaz, Enter ile gönder (Esc: vazgeç)…" autocomplete="off"><span id="counter">0/80</span></div>
 <div id="goal"></div>
 <div id="toast"></div>
-<div id="normal" class="hidden">Normal imleç modu — siteye dönmek için çift tıkla</div>
 <div id="score" class="hidden"><span id="sHalf">1. Devre</span><span class="team red" id="sRed">0</span><span id="sTime">01:00</span><span class="team blue" id="sBlue">0</span><span id="sMsg" class="hidden"></span></div>
 
 <div id="join">

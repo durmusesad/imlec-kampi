@@ -72,7 +72,7 @@ function notice(p, text) {
 }
 
 function publicPlayer(p) {
-  return { id: p.id, name: p.name, color: p.color, x: p.x, y: p.y };
+  return { id: p.id, name: p.name, color: p.color, x: p.x, y: p.y, afk: !!p.afk, typing: !!p.typing };
 }
 
 function clamp(v, a, b) {
@@ -207,6 +207,7 @@ wss.on('connection', (ws) => {
         me.ws = ws;
         me.ghostUntil = 0;
         me.queue = [];
+        me.afk = me.typing = false;
       } else {
         if (players.size >= MAX_PLAYERS) {
           send(ws, { t: 'full' });
@@ -274,6 +275,16 @@ wss.on('connection', (ws) => {
       }
       case 'leave': {
         if (me.team) setTeam(me, null);
+        break;
+      }
+      case 'status': {
+        // Oyuncu oyunu durdurdu (uzakta) ya da sohbete yazıyor; diğerleri imlecinin üstünde görür
+        const afk = !!m.afk, typing = !!m.typing && !afk;
+        if (afk === !!me.afk && typing === !!me.typing) return;
+        if (!allow(me, 'status', 20, 5000)) return;
+        me.afk = afk;
+        me.typing = typing;
+        broadcast({ t: 'status', id: me.id, afk, typing }, me.id);
         break;
       }
       case 'bye': {
