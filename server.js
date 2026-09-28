@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const WORLD = require('./public/world.js');
-const { Match } = require('./haxball.js');
+const { Match } = require('./public/haxball.js');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC = path.join(__dirname, 'public');
@@ -48,19 +48,27 @@ const server = http.createServer((req, res) => {
 });
 
 // ---------- Oyun durumu ----------
+const HAX = WORLD.HAX;
+const RECONNECT_GRACE = 15000; // kopan oyuncunun geri dönmesi için süre (ms)
 const players = new Map(); // id -> oyuncu
 const scores = {}; // id -> atılan gol
+const chatLog = []; // son mesajlar (yeni gelenler de görsün)
 let nextId = 1;
 let match = null; // yürüyen HaxBall maçı
-let lastResult = null; // son biten maç {winner, score}
+let matchStartedAt = 0;
+let lastResult = null; // son biten maç
 
 function send(ws, msg) {
-  if (ws.readyState === 1) ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  if (ws && ws.readyState === 1) ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg));
 }
 
 function broadcast(msg, exceptId) {
   const data = JSON.stringify(msg);
   for (const p of players.values()) if (p.id !== exceptId) send(p.ws, data);
+}
+
+function notice(p, text) {
+  send(p.ws, { t: 'notice', text });
 }
 
 function publicPlayer(p) {
@@ -79,13 +87,23 @@ function cleanText(s, max) {
   return String(s == null ? '' : s).replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, max);
 }
 
+// Basit hız sınırı: pencere içinde en fazla n olay
+function allow(p, key, n, windowMs) {
+  const now = Date.now();
+  const arr = (p.rate[key] = (p.rate[key] || []).filter((t) => now - t < windowMs));
+  if (arr.length >= n) return false;
+  arr.push(now);
+  return true;
+}
+
+function teamIds(team) {
+  const ids = [];
+  for (const p of players.values()) if (p.team === team) ids.push(p.id);
+  return ids;
+}
+
 function lobbyState() {
-  const red = [], blue = [];
-  for (const p of players.values()) {
-    if (p.team === 'red') red.push(p.id);
-    else if (p.team === 'blue') blue.push(p.id);
-  }
-  return { t: 'lobby', red, blue, running: !!match, last: lastResult };
+  return { t: 'lobby', red: teamIds('red'), blue: teamIds('blue'), running: !!match, last: lastResult };
 }
 
 function broadcastLobby() {
@@ -98,35 +116,65 @@ function onPad(p, pad) {
   return p.x >= pad.x - m && p.x <= pad.x + pad.w + m && p.y >= pad.y - m && p.y <= pad.y + pad.h + m;
 }
 
+function syncCursorToDisc(p) {
+  const d = match && match.players.get(p.id);
+  if (!d) return;
+  const w = WORLD.toWorld(d.x, d.y);
+  p.x = w.x;
+  p.y = w.y;
+}
+
+// Maçtan çıkan oyuncunun imleci sahanın dışına, takım alanının yanına ışınlanır
+function teleportOut(p, team) {
+  const pad = WORLD.PADS[team] || WORLD.PADS.start;
+  p.x = pad.x + pad.w / 2;
+  p.y = pad.y + pad.h + 60;
+  send(p.ws, { t: 'tp', x: p.x, y: p.y });
+}
+
 function startMatch() {
   match = new Match();
+  matchStartedAt = Date.now();
   lastResult = null;
-  for (const p of players.values()) if (p.team) match.addPlayer(p.id, p.team);
+  for (const p of players.values()) {
+    if (!p.team) continue;
+    p.queue = [];
+    match.addPlayer(p.id, p.team);
+  }
   broadcastLobby();
+  broadcastMatch();
 }
 
 function stopMatch() {
   if (!match) return;
-  // Oyuncuların imleçleri disklerin olduğu yerde kalır
-  for (const d of match.players.values()) {
-    const p = players.get(d.id);
-    if (p) {
-      const w = WORLD.toWorld(d.x, d.y);
-      p.x = w.x;
-      p.y = w.y;
-    }
-  }
+  for (const p of players.values()) syncCursorToDisc(p);
   match = null;
   broadcastLobby();
 }
 
 function setTeam(p, team) {
-  if (p.team === team) team = null; // aynı alana tekrar tıklamak takımdan çıkarır
-  if (match && p.team) match.removePlayer(p.id);
+  const old = p.team;
+  if (old === team) return;
+  if (team && teamIds(team).length >= HAX.teamMax) {
+    notice(p, `${HAX.teams[team].name} takım dolu (en fazla ${HAX.teamMax} kişi).`);
+    return;
+  }
+  if (match && old) {
+    match.removePlayer(p.id);
+    teleportOut(p, old);
+  }
   p.team = team;
+  p.queue = [];
   if (match && team) match.addPlayer(p.id, team);
-  if (match && match.players.size === 0) stopMatch();
   broadcastLobby();
+}
+
+function removePlayer(p) {
+  players.delete(p.id);
+  delete scores[p.id];
+  if (match) match.removePlayer(p.id);
+  broadcast({ t: 'leave', id: p.id });
+  if (p.team) broadcastLobby();
 }
 
 // ---------- WebSocket ----------
@@ -148,27 +196,46 @@ wss.on('connection', (ws) => {
 
     if (m.t === 'join') {
       if (me) return;
-      if (players.size >= MAX_PLAYERS) {
-        send(ws, { t: 'full' });
-        ws.close();
-        return;
+      const token = typeof m.token === 'string' && /^[a-z0-9]{8,40}$/i.test(m.token) ? m.token : null;
+      // Kısa kopmadan dönen oyuncu: aynı kimlik, takım ve disk korunur
+      let restored = null;
+      if (token) {
+        for (const p of players.values()) if (p.token === token && !p.ws) restored = p;
       }
-      const name = cleanText(m.name, 16) || 'İsimsiz';
-      const color = WORLD.COLORS.includes(m.color) ? m.color : WORLD.COLORS[0];
-      const x = num(m.x) ? clamp(m.x, 0, WORLD.W) : WORLD.SPAWN.x;
-      const y = num(m.y) ? clamp(m.y, 0, WORLD.H) : WORLD.SPAWN.y;
-      me = { id: nextId++, ws, name, color, x, y, team: null };
-      players.set(me.id, me);
-      scores[me.id] = 0;
+      if (restored) {
+        me = restored;
+        me.ws = ws;
+        me.ghostUntil = 0;
+        me.queue = [];
+      } else {
+        if (players.size >= MAX_PLAYERS) {
+          send(ws, { t: 'full' });
+          ws.close();
+          return;
+        }
+        const tokenInUse = token && [...players.values()].some((p) => p.token === token);
+        const x = num(m.x) ? clamp(m.x, 0, WORLD.W) : WORLD.SPAWN.x;
+        const y = num(m.y) ? clamp(m.y, 0, WORLD.H) : WORLD.SPAWN.y;
+        me = {
+          id: nextId++, ws, token: tokenInUse ? null : token, x, y, team: null,
+          queue: [], ack: 0, ghostUntil: 0, rate: {},
+        };
+        players.set(me.id, me);
+        scores[me.id] = 0;
+      }
+      me.name = cleanText(m.name, 16) || 'İsimsiz';
+      me.color = WORLD.COLORS.includes(m.color) ? m.color : WORLD.COLORS[0];
       send(ws, {
         t: 'welcome',
         id: me.id,
+        restored: !!restored,
         players: [...players.values()].map(publicPlayer),
         scores,
+        chat: chatLog,
       });
       send(ws, lobbyState());
-      if (match) send(ws, { t: 'g', ...match.snapshot() });
-      broadcast({ t: 'join', p: publicPlayer(me) }, me.id);
+      if (match) send(ws, { t: 'g', ...match.snapshot(ackOf) });
+      broadcast({ t: 'join', p: publicPlayer(me) }, me.id); // geri dönende isim/renk değişmiş olabilir
       return;
     }
     if (!me) return;
@@ -181,51 +248,71 @@ wss.on('connection', (ws) => {
         me.y = clamp(m.y, 0, WORLD.H);
         break;
       }
-      case 'input': {
-        if (match && num(m.k)) match.setInput(me.id, m.k);
+      case 'i': {
+        // Maç girdisi: her istemci tick'i için bir tane; sunucu her tick'te bir tane uygular
+        if (!match || !match.players.has(me.id) || !num(m.s) || !num(m.k)) return;
+        me.queue.push([m.s, m.k & 31]);
+        if (me.queue.length > 8) me.queue.splice(0, me.queue.length - 8); // gecikme birikmesin
         break;
       }
       case 'pad': {
         const pad = WORLD.PADS[m.pad];
         if (!pad || !onPad(me, pad)) return;
-        if (m.pad === 'red' || m.pad === 'blue') setTeam(me, m.pad);
-        else if (m.pad === 'start') {
-          if (match) stopMatch();
-          else if ([...players.values()].some((p) => p.team)) startMatch();
+        if (m.pad === 'red' || m.pad === 'blue') {
+          setTeam(me, me.team === m.pad ? null : m.pad); // aynı alana tekrar tıklamak takımdan çıkarır
+        } else if (m.pad === 'start') {
+          if (match) {
+            if (Date.now() - matchStartedAt < 3000) return; // yanlışlıkla çift tıklamaya karşı
+            broadcast({ t: 'notice', text: `${me.name} maçı bitirdi.` });
+            stopMatch();
+          } else if (!teamIds('red').length || !teamIds('blue').length) {
+            notice(me, 'Başlatmak için her takımda en az 1 oyuncu olmalı.');
+          } else startMatch();
         }
         break;
       }
+      case 'leave': {
+        if (me.team) setTeam(me, null);
+        break;
+      }
       case 'chat': {
-        const text = cleanText(m.text, 80);
-        if (text) broadcast({ t: 'chat', id: me.id, text });
+        const text = cleanText(m.text, WORLD.CHAT_MAX);
+        if (!text) return;
+        if (!allow(me, 'chat', 4, 4000)) {
+          notice(me, 'Çok hızlı yazıyorsun, biraz bekle.');
+          return;
+        }
+        const msg = { t: 'chat', id: me.id, name: me.name, color: me.color, text, ts: Date.now() };
+        chatLog.push(msg);
+        if (chatLog.length > 40) chatLog.shift();
+        broadcast(msg);
         break;
       }
       case 'ping': {
-        if (!num(m.x) || !num(m.y)) return;
+        if (!num(m.x) || !num(m.y) || !allow(me, 'ping', 4, 1000)) return;
         broadcast({ t: 'ping', id: me.id, x: clamp(m.x, 0, WORLD.W), y: clamp(m.y, 0, WORLD.H) }, me.id);
         break;
       }
       case 'emote': {
-        if (WORLD.EMOTES.includes(m.e)) broadcast({ t: 'emote', id: me.id, e: m.e }, me.id);
+        if (WORLD.EMOJI_PALETTE.includes(m.e) && allow(me, 'emote', 4, 1500)) {
+          broadcast({ t: 'emote', id: me.id, e: m.e }, me.id);
+        }
         break;
       }
     }
   });
 
   ws.on('close', () => {
-    if (!me) return;
-    players.delete(me.id);
-    delete scores[me.id];
-    if (match) {
-      match.removePlayer(me.id);
-      if (match.players.size === 0) stopMatch();
-    }
-    broadcast({ t: 'leave', id: me.id });
-    if (me.team) broadcastLobby();
+    if (!me || me.ws !== ws) return;
+    // Hemen silme: kısa kopmalarda (Cloud Run 60 dk sınırı, wifi) oyuncu yerine dönebilsin
+    me.ws = null;
+    me.queue = [];
+    me.ghostUntil = Date.now() + RECONNECT_GRACE;
+    if (match) match.setInput(me.id, 0);
   });
 });
 
-// Ölü bağlantıları temizle
+// Ölü bağlantıları ve süresi dolan kopuk oyuncuları temizle
 setInterval(() => {
   for (const ws of wss.clients) {
     if (!ws.isAlive) {
@@ -236,20 +323,47 @@ setInterval(() => {
     ws.ping();
   }
 }, 20000);
+setInterval(() => {
+  const now = Date.now();
+  for (const p of [...players.values()]) if (!p.ws && p.ghostUntil && now > p.ghostUntil) removePlayer(p);
+}, 1000);
 
-// ---------- Maç döngüsü (60 Hz) ----------
+// ---------- Maç döngüsü (60 Hz, otoriter) ----------
+function ackOf(id) {
+  const p = players.get(id);
+  return p ? p.ack : 0;
+}
+
+function broadcastMatch() {
+  if (match) broadcast({ t: 'g', ...match.snapshot(ackOf) });
+}
+
 let endAt = 0;
 function step() {
+  // Her oyuncu için sıradaki girdiyi uygula; kuyruk boşsa son girdi devam eder
+  for (const d of match.players.values()) {
+    const p = players.get(d.id);
+    if (!p) continue;
+    if (!p.ws) {
+      match.setInput(d.id, 0);
+      continue;
+    }
+    const next = p.queue.shift();
+    if (next) {
+      p.ack = next[0];
+      match.setInput(d.id, next[1]);
+    }
+  }
   const events = match.step();
   for (const ev of events) {
     if (ev.type === 'goal') {
       if (ev.by != null && !ev.own && scores[ev.by] != null) scores[ev.by]++;
       broadcast({ t: 'goal', team: ev.team, by: ev.by, own: ev.own, score: ev.score, scores });
-    } else if (ev.type === 'overtime') {
-      broadcast({ t: 'overtime' });
+    } else if (ev.type === 'halftime') {
+      broadcast({ t: 'halftime' });
     } else if (ev.type === 'end') {
-      lastResult = { winner: ev.winner, score: ev.score };
-      broadcast({ t: 'end', winner: ev.winner, score: ev.score });
+      lastResult = { winner: ev.winner, score: ev.score, reason: ev.reason };
+      broadcast({ t: 'end', winner: ev.winner, score: ev.score, reason: ev.reason });
       endAt = Date.now() + 3000;
     }
   }
@@ -265,23 +379,15 @@ setInterval(() => {
     return;
   }
   if (now - nextTick > 250) nextTick = now; // uzun duraklamadan sonra yetişmeye çalışma
-  let stepped = false;
+  let broadcastDue = false;
   while (match && nextTick <= now) {
     step();
     nextTick += TICK_MS;
-    stepped = true;
+    if (match.tick % 2 === 0) broadcastDue = true; // 30 Hz tam durum; istemci aradakini tahmin eder
   }
-  if (!match || !stepped) return;
-  // Maç diskleri imleç konumunu da belirler (mini harita, seyirci görünümü)
-  for (const d of match.players.values()) {
-    const p = players.get(d.id);
-    if (p) {
-      const w = WORLD.toWorld(d.x, d.y);
-      p.x = w.x;
-      p.y = w.y;
-    }
-  }
-  broadcast({ t: 'g', ...match.snapshot() });
+  if (!match) return;
+  for (const p of players.values()) syncCursorToDisc(p);
+  if (broadcastDue) broadcastMatch();
   if (match.phase === 'ended' && Date.now() >= endAt) stopMatch();
 }, 4);
 

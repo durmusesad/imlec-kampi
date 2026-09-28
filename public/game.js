@@ -1,38 +1,64 @@
 (() => {
   'use strict';
   const W = window.WORLD;
+  const HB = window.HAXBALL;
+  const H = W.HAX;
   const INK = '#3b2f24';
-  const INTERP_DELAY = 100; // ms — diğer oyuncular bu kadar geriden çizilir
+  const INTERP_DELAY = 100; // ms — diğer imleçler bu kadar geriden çizilir
   const SEND_EVERY = 33; // ms (~30 Hz)
+  const TICK = 1 / HB.TPS;
 
   const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { alpha: false });
   const $ = (id) => document.getElementById(id);
+
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  };
 
   // ---------- Durum ----------
   const me = { x: W.SPAWN.x, y: W.SPAWN.y, vx: 0, vy: 0, name: '', color: W.COLORS[0] };
   let myId = null;
   let joined = false;
-  let locked = false;
+  let locked = false; // imleç kilidi = "oyun modu"; kilit yoksa normal imleç modu
   let chatting = false;
   let inAx = 0, inAy = 0; // bu karede biriken fare hareketi
-  const players = new Map(); // id -> {id, name, color, snaps, chat, emote}
+  const players = new Map(); // id -> {id, name, color, snaps, chat, emote, render}
   let scores = {};
-  const H = W.HAX;
-  const MATCH_DELAY = 50; // ms — maç diskleri bu kadar geriden, akıcı çizilir
-  const matchSnaps = []; // {t, p: Map(id -> {x, y, k}), b: {x, y}}
-  let matchMeta = null; // son anlık görüntünün skor/süre bilgisi
   let lobby = { red: [], blue: [], running: false, last: null };
-  const ball = { x: H.cx, y: H.cy, rot: 0 };
+  const ball = { x: H.cx, y: H.cy };
   const keys = new Set();
-  let lastInput = -1;
   const pings = [];
   const cam = { x: 0, y: 0, init: false };
   let vw = innerWidth, vh = innerHeight, dpr = 1;
 
+  // Maç tahmini (HaxBall gibi): istemci aynı fiziği çalıştırır, sunucu durumu gelince düzeltir
+  let sim = null; // HB.Match
+  let meta = null; // son sunucu anlık görüntüsü
+  let simAcc = 0;
+  let seq = 0;
+  let pending = []; // sunucunun henüz uygulamadığı kendi girdilerimiz [seq, bits]
+  let prevPos = new Map(); // son adımdan önceki konumlar (kareler arası yumuşatma)
+  const offsets = new Map(); // düzeltmelerde oluşan görsel sapma, zamanla sönümlenir
+
+  // Hızlı emoji menüsü (kişiye özel, tarayıcıda saklanır)
+  let quick = store.get('imlec-kampi:hizli-emoji', null);
+  if (!Array.isArray(quick) || quick.length !== 8 || !quick.every((e) => W.EMOJI_PALETTE.includes(e))) {
+    quick = W.DEFAULT_QUICK.slice();
+  }
+  let radial = null; // {vx, vy, sel} — açıkken fare hareketi seçimi yönlendirir
+
+  // Yeniden bağlanınca aynı oyuncu olarak dönebilmek için sekmeye özel anahtar
+  let token = null;
+  try { token = sessionStorage.getItem('imlec-kampi:token'); } catch {}
+  if (!token) {
+    token = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(36).padStart(2, '0')).join('').slice(0, 20);
+    try { sessionStorage.setItem('imlec-kampi:token', token); } catch {}
+  }
+
   // ---------- Giriş ekranı ----------
-  let saved = {};
-  try { saved = JSON.parse(localStorage.getItem('imlec-kampi:oyuncu') || '{}'); } catch {}
+  const saved = store.get('imlec-kampi:oyuncu', {}) || {};
   const nameInput = $('name');
   nameInput.value = saved.name || '';
   me.color = W.COLORS.includes(saved.color) ? saved.color : W.COLORS[Math.floor(Math.random() * W.COLORS.length)];
@@ -56,44 +82,79 @@
     const name = nameInput.value.trim().slice(0, 16);
     if (!name) { nameInput.focus(); return; }
     me.name = name;
-    try { localStorage.setItem('imlec-kampi:oyuncu', JSON.stringify({ name, color: me.color })); } catch {}
+    store.set('imlec-kampi:oyuncu', { name, color: me.color });
     joined = true;
     $('join').classList.add('hidden');
-    ['players', 'hint'].forEach((id) => $(id).classList.remove('hidden'));
-    $('resume').classList.remove('hidden'); // kilit alınınca pointerlockchange gizler
+    ['players', 'hint', 'chatlog'].forEach((id) => $(id).classList.remove('hidden'));
     connect();
     requestLock();
+    updateModeUi();
   }
 
-  // ---------- Pointer Lock ----------
+  // ---------- Oyun modu / normal imleç modu ----------
+  // Oyun modu: imleç kilitli, site her şeyi dinler. Normal mod (Q veya Esc): gerçek imleç geri gelir,
+  // site hiçbir tıklamaya/tuşa tepki vermez; çift tıklayınca oyun moduna dönülür.
   function requestLock() {
     try {
       const r = canvas.requestPointerLock();
       if (r && r.catch) r.catch(() => {});
     } catch {}
   }
-  // Maçtaki oyuncu klavyeyle oynar; imleç kilidine ihtiyaç yok, "devam" ekranı gösterilmez
-  function updateResume() {
-    $('resume').classList.toggle('hidden', locked || !joined || inMatch());
-    document.body.classList.toggle('playing', inMatch());
+  function updateModeUi() {
+    $('normal').classList.toggle('hidden', !joined || locked || !$('emojiPanel').classList.contains('hidden'));
+    document.body.classList.toggle('normal', joined && !locked);
   }
   document.addEventListener('pointerlockchange', () => {
     locked = document.pointerLockElement === canvas;
-    if (!locked) { inAx = inAy = 0; if (!inMatch()) closeChat(); }
-    updateResume();
+    if (!locked) {
+      inAx = inAy = 0;
+      radial = null;
+      keys.clear();
+      closeChat();
+    }
+    updateModeUi();
   });
-  document.addEventListener('pointerlockerror', updateResume);
-  $('resume').addEventListener('click', requestLock);
-  if (location.hostname === 'localhost') window.__imlec = { me, players, step: (dt) => stepMovement(dt), send: (m) => send(m) }; // yerel test kancası
+  document.addEventListener('pointerlockerror', updateModeUi);
+  canvas.addEventListener('dblclick', () => {
+    if (joined && !locked) requestLock();
+  });
+  document.addEventListener('contextmenu', (e) => {
+    if (joined && locked) e.preventDefault();
+  });
+
   document.addEventListener('mousemove', (e) => {
     if (!locked) return;
+    if (radial) {
+      // Menü açıkken fare imleci değil seçimi hareket ettirir
+      radial.vx += e.movementX;
+      radial.vy += e.movementY;
+      const len = Math.hypot(radial.vx, radial.vy);
+      if (len > 90) { radial.vx *= 90 / len; radial.vy *= 90 / len; }
+      radial.sel = len > 28 ? sectorOf(radial.vx, radial.vy) : -1;
+      return;
+    }
     inAx += e.movementX;
     inAy += e.movementY;
   });
+
+  function sectorOf(x, y) {
+    // 0 = üst, saat yönünde 8 dilim
+    const a = Math.atan2(y, x) + Math.PI / 2;
+    return ((Math.round(a / (Math.PI / 4)) % 8) + 8) % 8;
+  }
+
   canvas.addEventListener('mousedown', (e) => {
-    if (!joined) return;
-    if (!locked) { requestLock(); return; }
-    if (e.button !== 0 || inMatch()) return;
+    if (!joined || !locked) return; // normal modda tek tıklama hiçbir şey yapmaz
+    if (e.button === 2) {
+      radial = { vx: 0, vy: 0, sel: -1 };
+      return;
+    }
+    if (e.button !== 0) return;
+    if (radial) {
+      pickRadial();
+      return;
+    }
+    if (inMatch()) return;
     for (const [name, pad] of Object.entries(W.PADS)) {
       if (W.inRect(me.x, me.y, pad)) {
         send({ t: 'pad', pad: name });
@@ -103,80 +164,162 @@
     addPing(me.x, me.y, me.color);
     send({ t: 'ping', x: me.x, y: me.y });
   });
+  document.addEventListener('mouseup', (e) => {
+    if (e.button === 2 && radial) pickRadial();
+  });
+  function pickRadial() {
+    if (radial && radial.sel >= 0) sendEmote(quick[radial.sel]);
+    radial = null;
+  }
+  function sendEmote(em) {
+    send({ t: 'emote', e: em });
+    showEmote(myId, em);
+  }
 
-  // ---------- Maç girdisi: WASD / oklar + Space (X) vuruş ----------
+  // ---------- Klavye ----------
   const KEYMAP = {
     KeyW: 1, ArrowUp: 1, KeyS: 2, ArrowDown: 2, KeyA: 4, ArrowLeft: 4, KeyD: 8, ArrowRight: 8, Space: 16, KeyX: 16,
   };
   function inMatch() {
     return lobby.running && myId != null && (lobby.red.includes(myId) || lobby.blue.includes(myId));
   }
-  function sendInput() {
-    let k = 0;
-    if (inMatch() && !chatting) for (const c of keys) k |= KEYMAP[c] || 0;
-    if (k === lastInput) return;
-    lastInput = k;
-    send({ t: 'input', k });
+  function myTeam() {
+    return lobby.red.includes(myId) ? 'red' : lobby.blue.includes(myId) ? 'blue' : null;
   }
-  document.addEventListener('keyup', (e) => {
-    if (keys.delete(e.code)) sendInput();
-  });
-  addEventListener('blur', () => {
-    keys.clear();
-    sendInput();
+  function inputBits() {
+    if (!locked || chatting) return 0;
+    let k = 0;
+    for (const c of keys) k |= KEYMAP[c] || 0;
+    return k;
+  }
+  document.addEventListener('keyup', (e) => keys.delete(e.code));
+  addEventListener('blur', () => keys.clear());
+
+  document.addEventListener('keydown', (e) => {
+    if (!joined || chatting || !locked) return; // normal modda tuşlar siteye gitmez
+    const playing = inMatch();
+    if (KEYMAP[e.code] && playing) {
+      e.preventDefault();
+      keys.add(e.code);
+      return;
+    }
+    if (e.repeat) return;
+    switch (e.code) {
+      case 'KeyQ':
+        document.exitPointerLock();
+        return;
+      case 'KeyT':
+      case 'Enter':
+        e.preventDefault();
+        openChat();
+        return;
+      case 'KeyL':
+        if (myTeam()) send({ t: 'leave' });
+        return;
+      case 'KeyE':
+        openEmojiPanel();
+        return;
+    }
+    const n = /^Digit([1-8])$/.exec(e.code);
+    if (n) sendEmote(quick[+n[1] - 1]);
   });
 
-  // ---------- Klavye: sohbet ve emojiler ----------
+  // ---------- Sohbet ----------
   const chatInput = $('chat');
+  chatInput.maxLength = W.CHAT_MAX;
   function openChat() {
     chatting = true;
-    $('chatbox').classList.remove('hidden');
-    chatInput.value = '';
-    chatInput.focus();
     keys.clear();
-    sendInput();
+    $('chatbox').classList.remove('hidden');
+    $('chatlog').classList.add('open');
+    chatInput.value = '';
+    updateCounter();
+    chatInput.focus();
   }
   function closeChat() {
     if (!chatting) return;
     chatting = false;
     chatInput.blur();
     $('chatbox').classList.add('hidden');
-    keys.clear();
-    sendInput();
+    $('chatlog').classList.remove('open');
   }
+  function updateCounter() {
+    const n = [...chatInput.value].length;
+    $('counter').textContent = `${n}/${W.CHAT_MAX}`;
+    $('counter').classList.toggle('full', n >= W.CHAT_MAX);
+  }
+  chatInput.addEventListener('input', updateCounter);
   chatInput.addEventListener('keydown', (e) => {
     e.stopPropagation();
     if (e.key === 'Escape') { closeChat(); return; }
     if (e.key === 'Enter') {
-      const text = chatInput.value.trim().slice(0, 80);
-      if (text) {
-        send({ t: 'chat', text });
-        showChat(myId, text);
-      }
+      e.preventDefault();
+      const text = chatInput.value.trim().slice(0, W.CHAT_MAX);
+      if (text) send({ t: 'chat', text });
       closeChat();
-      e.preventDefault();
     }
   });
-  document.addEventListener('keydown', (e) => {
-    if (!joined || chatting) return;
-    const playing = inMatch();
-    if (KEYMAP[e.code] && playing) {
-      e.preventDefault();
-      if (!keys.has(e.code)) {
-        keys.add(e.code);
-        sendInput();
+
+  function addChatLine(m) {
+    const log = $('chatlog');
+    const row = document.createElement('div');
+    row.className = 'line';
+    const nm = document.createElement('b');
+    nm.textContent = m.name + ': ';
+    nm.style.color = m.color;
+    const tx = document.createElement('span');
+    tx.textContent = m.text;
+    row.append(nm, tx);
+    log.appendChild(row);
+    while (log.children.length > 30) log.firstChild.remove();
+    log.scrollTop = log.scrollHeight;
+    setTimeout(() => row.classList.add('old'), 12000);
+  }
+
+  // ---------- Hızlı emoji ayarları ----------
+  let slotSel = 0;
+  function renderEmojiPanel() {
+    const slots = $('slots');
+    slots.innerHTML = '';
+    quick.forEach((em, i) => {
+      const b = document.createElement('button');
+      b.className = 'slot' + (i === slotSel ? ' sel' : '');
+      b.innerHTML = `<span class="em"></span><span class="k">${i + 1}</span>`;
+      b.firstChild.textContent = em;
+      b.onclick = () => { slotSel = i; renderEmojiPanel(); };
+      slots.appendChild(b);
+    });
+    const pal = $('palette');
+    if (!pal.children.length) {
+      for (const em of W.EMOJI_PALETTE) {
+        const b = document.createElement('button');
+        b.textContent = em;
+        b.onclick = () => {
+          quick[slotSel] = em;
+          slotSel = (slotSel + 1) % 8;
+          store.set('imlec-kampi:hizli-emoji', quick);
+          renderEmojiPanel();
+        };
+        pal.appendChild(b);
       }
-      return;
     }
-    if (!locked && !playing) return;
-    if (e.key === 'Enter') { openChat(); e.preventDefault(); return; }
-    const n = '12345'.indexOf(e.key);
-    if (n >= 0 && !e.repeat) {
-      const em = W.EMOTES[n];
-      send({ t: 'emote', e: em });
-      showEmote(myId, em);
-    }
-  });
+  }
+  function openEmojiPanel() {
+    renderEmojiPanel();
+    $('emojiPanel').classList.remove('hidden');
+    document.exitPointerLock();
+    updateModeUi();
+  }
+  $('emojiReset').onclick = () => {
+    quick = W.DEFAULT_QUICK.slice();
+    store.set('imlec-kampi:hizli-emoji', quick);
+    renderEmojiPanel();
+  };
+  $('emojiClose').onclick = () => {
+    $('emojiPanel').classList.add('hidden');
+    requestLock();
+    updateModeUi();
+  };
 
   // ---------- Ağ ----------
   let ws = null;
@@ -189,13 +332,22 @@
     $('status').classList.toggle('hidden', !text);
   }
 
+  let toastTimer = null;
+  function toast(text) {
+    const el = $('toast');
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+  }
+
   function connect() {
     setStatus('Bağlanıyor…');
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}`);
     ws.onopen = () => {
       retries = 0;
-      ws.send(JSON.stringify({ t: 'join', name: me.name, color: me.color, x: me.x, y: me.y }));
+      ws.send(JSON.stringify({ t: 'join', name: me.name, color: me.color, x: me.x, y: me.y, token }));
     };
     ws.onmessage = (ev) => {
       let m;
@@ -204,15 +356,7 @@
     };
     ws.onclose = () => {
       connected = false;
-      myId = null;
-      players.clear();
-      lobby = { red: [], blue: [], running: false, last: null };
-      matchSnaps.length = 0;
-      matchMeta = null;
-      lastInput = -1;
-      renderPlayerList();
-      updateHud();
-      const delay = Math.min(5000, 400 * Math.pow(2, retries++));
+      const delay = Math.min(5000, 300 * Math.pow(2, retries++));
       setStatus('Bağlantı koptu, yeniden bağlanılıyor…');
       setTimeout(connect, delay);
     };
@@ -223,7 +367,21 @@
   }
 
   function addPlayer(p) {
-    players.set(p.id, { id: p.id, name: p.name, color: p.color, snaps: [{ t: performance.now(), x: p.x, y: p.y }], chat: null, emote: null });
+    const old = players.get(p.id);
+    players.set(p.id, {
+      id: p.id, name: p.name, color: p.color,
+      snaps: [{ t: performance.now(), x: p.x, y: p.y }],
+      chat: old ? old.chat : null, emote: old ? old.emote : null,
+    });
+  }
+
+  function resetMatchView() {
+    sim = null;
+    meta = null;
+    pending = [];
+    offsets.clear();
+    prevPos = new Map();
+    simAcc = 0;
   }
 
   function handle(m) {
@@ -236,6 +394,11 @@
         players.clear();
         for (const p of m.players) addPlayer(p);
         scores = m.scores || {};
+        resetMatchView();
+        if (!m.restored) {
+          $('chatlog').querySelectorAll('.line').forEach((n) => n.remove());
+          for (const c of m.chat || []) addChatLine(c);
+        }
         renderPlayerList();
         break;
       case 'join':
@@ -257,44 +420,38 @@
         }
         break;
       case 'lobby': {
-        const was = inMatch();
         lobby = m;
-        if (!m.running) {
-          matchSnaps.length = 0;
-          matchMeta = null;
-        }
-        if (was && !inMatch()) {
-          // Maç bitti: imleç diskin son konumundan devam eder
-          keys.clear();
-          me.vx = me.vy = 0;
-        }
-        lastInput = -1;
-        sendInput();
-        updateResume();
+        if (!m.running) resetMatchView();
+        keys.clear();
+        renderPlayerList();
         updateHud();
         break;
       }
-      case 'g': {
-        const pm = new Map();
-        for (const [id, x, y, k] of m.p) pm.set(id, { x, y, k });
-        matchSnaps.push({ t: now, p: pm, b: { x: m.b[0], y: m.b[1] } });
-        if (matchSnaps.length > 60) matchSnaps.shift();
-        const firstMeta = !matchMeta;
-        matchMeta = m;
-        if (firstMeta) updateResume();
-        updateHud();
+      case 'g':
+        onSnapshot(m);
         break;
-      }
-      case 'overtime':
-        announce('UZATMA!', '#fff');
+      case 'tp':
+        me.x = m.x;
+        me.y = m.y;
+        me.vx = me.vy = 0;
+        break;
+      case 'notice':
+        toast(m.text);
+        break;
+      case 'halftime':
+        announce('DEVRE ARASI', '#fff', 'Taraflar değişiyor');
         break;
       case 'end': {
         const t = m.winner ? H.teams[m.winner] : null;
-        announce(t ? `${t.name} kazandı!` : 'Berabere!', t ? t.color : '#fff');
+        const sub = m.reason === 'forfeit' ? 'Rakip takım boş kaldı — hükmen galibiyet'
+          : m.reason === 'empty' ? 'Oyuncu kalmadı' : `${m.score.red} - ${m.score.blue}`;
+        if (m.reason === 'empty') announce('Maç bitti', '#fff', sub);
+        else announce(t ? `${t.name} kazandı!` : 'Berabere!', t ? t.color : '#fff', sub);
         break;
       }
       case 'chat':
         showChat(m.id, m.text);
+        addChatLine(m);
         break;
       case 'ping': {
         const p = players.get(m.id);
@@ -310,7 +467,7 @@
         const p = m.by != null ? players.get(m.by) : null;
         const team = H.teams[m.team];
         const who = p ? (m.own ? `${p.name} (kendi kalesine)` : p.name) : team.name;
-        announce(`GOL! ${who}`, team.color);
+        announce(`GOL! ${who}`, team.color, `${m.score.red} - ${m.score.blue}`);
         break;
       }
       case 'full':
@@ -320,12 +477,105 @@
   }
 
   setInterval(() => {
-    if (!connected || myId == null) return;
+    if (!connected || myId == null || inMatch()) return;
     const x = Math.round(me.x * 10) / 10, y = Math.round(me.y * 10) / 10;
     if (x === lastSent.x && y === lastSent.y) return;
     lastSent = { x, y };
     send({ t: 'pos', x, y });
   }, SEND_EVERY);
+
+  // ---------- Maç tahmini ----------
+  function simPositions() {
+    const m = new Map();
+    for (const p of sim.players.values()) m.set(p.id, { x: p.x, y: p.y });
+    m.set('ball', { x: sim.ball.x, y: sim.ball.y });
+    return m;
+  }
+
+  function simStep(bits) {
+    prevPos = simPositions();
+    if (bits != null) sim.setInput(myId, bits);
+    sim.step(true);
+  }
+
+  function onSnapshot(g) {
+    meta = g;
+    if (!lobby.running) return;
+    if (!sim) {
+      sim = new HB.Match();
+      sim.load(g);
+      pending = [];
+      prevPos = simPositions();
+      updateHud();
+      return;
+    }
+    const before = renderPositions(1);
+    sim.load(g);
+    const mine = g.p.find((q) => q[0] === myId);
+    if (mine) {
+      const ack = mine[8];
+      pending = pending.filter(([s]) => s > ack);
+      if (pending.length > 90) pending = pending.slice(-90);
+      // Sunucunun henüz işlemediği girdilerimizi yeniden oynat: kendi diskimiz gecikmesiz görünür
+      for (const [, k] of pending) simStep(k);
+      if (!pending.length) prevPos = simPositions();
+    } else {
+      pending = [];
+      prevPos = simPositions();
+    }
+    // Düzeltmeyi bir anda değil, birkaç karede yumuşakça uygula
+    const after = renderPositions(1, true);
+    for (const [id, a] of after) {
+      const b = before.get(id);
+      if (!b) continue;
+      const o = offsets.get(id) || { x: 0, y: 0 };
+      o.x += b.x - a.x;
+      o.y += b.y - a.y;
+      if (Math.hypot(o.x, o.y) > 60) { o.x = 0; o.y = 0; } // büyük sıçrama (gol, devre): direkt geç
+      offsets.set(id, o);
+    }
+    updateHud();
+  }
+
+  // Kareler arası ara konum + düzeltme sapması (HaxBall birimleri)
+  function renderPositions(alpha, noOffset) {
+    const out = new Map();
+    if (!sim) return out;
+    const cur = simPositions();
+    for (const [id, c] of cur) {
+      const p = prevPos.get(id) || c;
+      const o = noOffset ? null : offsets.get(id);
+      out.set(id, {
+        x: p.x + (c.x - p.x) * alpha + (o ? o.x : 0),
+        y: p.y + (c.y - p.y) * alpha + (o ? o.y : 0),
+      });
+    }
+    return out;
+  }
+
+  function advanceSim(dt) {
+    if (!sim) return;
+    const playing = inMatch() && sim.players.has(myId);
+    simAcc += dt;
+    let steps = 0;
+    while (simAcc >= TICK && steps < 6) {
+      simAcc -= TICK;
+      steps++;
+      if (playing) {
+        const k = inputBits();
+        seq++;
+        pending.push([seq, k]);
+        send({ t: 'i', s: seq, k });
+        simStep(k);
+      } else simStep(null);
+    }
+    if (steps === 6) simAcc = 0; // sekme arka plandaydı: yetişmeye çalışma
+    const decay = Math.exp(-dt * 14);
+    for (const o of offsets.values()) {
+      o.x *= decay;
+      o.y *= decay;
+    }
+  }
 
   // ---------- Sosyal ----------
   function showChat(id, text) {
@@ -341,29 +591,53 @@
   }
 
   let goalTimer = null;
-  function announce(text, color) {
+  function announce(text, color, sub) {
     const el = $('goal');
-    el.textContent = text;
-    el.style.color = color || '#fff';
+    el.innerHTML = '';
+    const t = document.createElement('div');
+    t.textContent = text;
+    t.style.color = color || '#fff';
+    el.appendChild(t);
+    if (sub) {
+      const s = document.createElement('small');
+      s.textContent = sub;
+      el.appendChild(s);
+    }
     el.classList.add('show');
     clearTimeout(goalTimer);
-    goalTimer = setTimeout(() => el.classList.remove('show'), 2500);
+    goalTimer = setTimeout(() => el.classList.remove('show'), 2800);
   }
 
+  let hudKey = '';
   function updateHud() {
     const el = $('score');
-    if (!lobby.running || !matchMeta) {
-      el.classList.add('hidden');
-      return;
+    const g = lobby.running ? meta : null;
+    let key = 'off';
+    if (g) {
+      const left = Math.max(0, H.halfSeconds - Math.floor(g.tk / HB.TPS));
+      const mm = String(Math.floor(left / 60)).padStart(2, '0');
+      const ss = String(left % 60).padStart(2, '0');
+      let msg = '';
+      const ffLeft = Math.ceil((H.forfeitSeconds * HB.TPS - g.ff) / HB.TPS);
+      if (g.ff > 0) {
+        const empty = g.p.some((q) => q[1] === 0) ? H.teams.blue.name : H.teams.red.name;
+        msg = `${empty} takımda oyuncu yok — ${ffLeft} sn içinde kimse katılmazsa maç hükmen biter`;
+      } else if (g.ph === 'kickoff') {
+        msg = `${H.teams[g.ko].name} başlıyor · ${Math.ceil(g.tmr / HB.TPS)} sn sonra orta yuvarlak herkese açılır`;
+      }
+      key = [g.s[0], g.s[1], g.half, mm, ss, msg].join('|');
+      if (key !== hudKey) {
+        $('sRed').textContent = g.s[0];
+        $('sBlue').textContent = g.s[1];
+        $('sHalf').textContent = `${g.half}. Devre`;
+        $('sTime').textContent = `${mm}:${ss}`;
+        $('sMsg').textContent = msg;
+        $('sMsg').classList.toggle('hidden', !msg);
+      }
     }
-    const m = matchMeta;
-    const sec = m.tm;
-    const mm = String(Math.floor(sec / 60)).padStart(2, '0');
-    const ss = String(sec % 60).padStart(2, '0');
-    $('sRed').textContent = m.s[0];
-    $('sBlue').textContent = m.s[1];
-    $('sTime').textContent = m.ot ? `UZATMA ${mm}:${ss}` : `${mm}:${ss}`;
-    el.classList.remove('hidden');
+    if (key === hudKey) return;
+    hudKey = key;
+    el.classList.toggle('hidden', !g);
   }
 
   function renderPlayerList() {
@@ -379,7 +653,9 @@
       row.className = 'row' + (p.id === myId ? ' me' : '');
       const dot = document.createElement('span');
       dot.className = 'dot';
+      const team = lobby.red.includes(p.id) ? 'red' : lobby.blue.includes(p.id) ? 'blue' : null;
       dot.style.background = p.color;
+      if (team) dot.style.boxShadow = `0 0 0 2px ${H.teams[team].color}`;
       const nm = document.createElement('span');
       nm.className = 'name';
       nm.textContent = p.name + (p.id === myId ? ' (sen)' : '');
@@ -389,6 +665,16 @@
       row.append(dot, nm, g);
       list.appendChild(row);
     }
+  }
+
+  if (location.hostname === 'localhost') {
+    // Yerel test kancası
+    window.__imlec = {
+      me, players, send: (m) => send(m), step: (dt) => stepMovement(dt),
+      get sim() { return sim; }, get pending() { return pending; }, keys,
+      setLocked: (v) => { locked = v; updateModeUi(); },
+      advance: (dt) => advanceSim(dt),
+    };
   }
 
   // ---------- Hareket (arazi etkileri) ----------
@@ -722,43 +1008,51 @@
   })();
 
   // ---------- Canlı çizim ----------
+  let lakeGradient = null;
   function drawWater(time) {
     const s = time / 1000;
     // Göl
-    const lg = ctx.createRadialGradient(W.LAKE.cx, W.LAKE.cy, 20, W.LAKE.cx, W.LAKE.cy, W.LAKE.rx);
-    lg.addColorStop(0, '#3f9fd8');
-    lg.addColorStop(1, '#6cc3ec');
-    ctx.fillStyle = lg;
-    ellipse(ctx, W.LAKE);
-    ctx.fill();
-    // Kıyıda hareketli köpük
-    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    for (let a = 0; a <= Math.PI * 2 + 0.01; a += 0.05) {
-      const w = 6 + Math.sin(a * 12 + s * 2) * 3;
-      const x = W.LAKE.cx + Math.cos(a) * (W.LAKE.rx - w);
-      const y = W.LAKE.cy + Math.sin(a) * (W.LAKE.ry - w);
-      a === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    // Dalgacıklar
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-    ctx.lineWidth = 3;
-    ctx.lineCap = 'round';
-    for (const [x, y, ph] of waveSpots) {
-      const dx = Math.sin(s * 0.8 + ph) * 10;
-      const a = 0.5 + 0.5 * Math.sin(s * 1.5 + ph);
-      ctx.globalAlpha = 0.35 + 0.65 * a;
+    const L = W.LAKE;
+    const lakeVisible = inView(L.cx, L.cy, Math.max(L.rx, L.ry) + 40);
+    if (lakeVisible) {
+      if (!lakeGradient) {
+        lakeGradient = ctx.createRadialGradient(L.cx, L.cy, 20, L.cx, L.cy, L.rx);
+        lakeGradient.addColorStop(0, '#3f9fd8');
+        lakeGradient.addColorStop(1, '#6cc3ec');
+      }
+      ctx.fillStyle = lakeGradient;
+      ellipse(ctx, W.LAKE);
+      ctx.fill();
+      // Kıyıda hareketli köpük
+      ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.moveTo(x + dx - 14, y);
-      ctx.quadraticCurveTo(x + dx - 7, y - 6, x + dx, y);
-      ctx.quadraticCurveTo(x + dx + 7, y + 6, x + dx + 14, y);
+      for (let a = 0; a <= Math.PI * 2 + 0.01; a += 0.05) {
+        const w = 6 + Math.sin(a * 12 + s * 2) * 3;
+        const x = W.LAKE.cx + Math.cos(a) * (W.LAKE.rx - w);
+        const y = W.LAKE.cy + Math.sin(a) * (W.LAKE.ry - w);
+        a === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
       ctx.stroke();
+      // Dalgacıklar
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 3;
+      ctx.lineCap = 'round';
+      for (const [x, y, ph] of waveSpots) {
+        const dx = Math.sin(s * 0.8 + ph) * 10;
+        const a = 0.5 + 0.5 * Math.sin(s * 1.5 + ph);
+        ctx.globalAlpha = 0.35 + 0.65 * a;
+        ctx.beginPath();
+        ctx.moveTo(x + dx - 14, y);
+        ctx.quadraticCurveTo(x + dx - 7, y - 6, x + dx, y);
+        ctx.quadraticCurveTo(x + dx + 7, y + 6, x + dx + 14, y);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
     }
-    ctx.globalAlpha = 1;
 
-    // Nehir
+    // Nehir (kamera nehrin kutusunun dışındaysa çizme)
+    if (!inView(1820, 250, 380)) return;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = '#4aa8de';
@@ -789,91 +1083,8 @@
     ctx.setLineDash([]);
   }
 
-  // Maç anlık görüntüleri arasında ara değer
-  function interpMatch(rt) {
-    const n = matchSnaps.length;
-    if (!n) return null;
-    let a = matchSnaps[0], b = a;
-    if (rt >= matchSnaps[n - 1].t) a = b = matchSnaps[n - 1];
-    else {
-      for (let i = n - 1; i > 0; i--) {
-        if (rt >= matchSnaps[i - 1].t) {
-          a = matchSnaps[i - 1];
-          b = matchSnaps[i];
-          break;
-        }
-      }
-    }
-    const k = b.t === a.t ? 1 : Math.max(0, Math.min(1, (rt - a.t) / (b.t - a.t)));
-    const lerp = (u, v) => u + (v - u) * k;
-    const p = new Map();
-    for (const [id, pb] of b.p) {
-      const pa = a.p.get(id) || pb;
-      p.set(id, { x: lerp(pa.x, pb.x), y: lerp(pa.y, pb.y), k: pb.k });
-    }
-    return { p, b: { x: lerp(a.b.x, b.b.x), y: lerp(a.b.y, b.b.y) } };
-  }
-
-  let matchView = null; // bu karede çizilen maç durumu
-  function drawMatch(time, mv) {
-    matchView = mv;
-    const S = H.S;
-    const bpos = matchView ? matchView.b : { x: H.cx, y: H.cy };
-    ball.x = bpos.x;
-    ball.y = bpos.y;
-    if (matchView) {
-      for (const [id, d] of matchView.p) {
-        const pl = players.get(id);
-        const team = lobby.red.includes(id) ? 'red' : 'blue';
-        drawDisc(pl, d, team, id === myId, time);
-      }
-    }
-    // Top (HaxBall: beyaz disk, siyah kenar)
-    ctx.fillStyle = '#fff';
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 2 * S;
-    ctx.beginPath();
-    ctx.arc(bpos.x, bpos.y, H.ball.radius * S, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-  }
-
-  function drawDisc(pl, d, team, isMe, time) {
-    const S = H.S, r = H.player.radius * S;
-    ctx.fillStyle = H.teams[team].color;
-    ctx.beginPath();
-    ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.lineWidth = 2 * S;
-    ctx.strokeStyle = d.k ? '#fff' : '#000';
-    ctx.stroke();
-    if (isMe) {
-      // Kendi diskin: HaxBall'daki gibi ince beyaz halka
-      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(d.x, d.y, r + 6, 0, Math.PI * 2);
-      ctx.stroke();
-    }
-    if (!pl) return;
-    ctx.fillStyle = '#fff';
-    ctx.font = `bold ${Math.round(13 * S)}px Arial, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText([...pl.name].slice(0, 2).join('').toUpperCase(), d.x, d.y + 1);
-    ctx.font = `bold ${Math.round(9 * S)}px Arial, sans-serif`;
-    ctx.fillStyle = '#fff';
-    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-    ctx.lineWidth = 3;
-    ctx.strokeText(pl.name, d.x, d.y + r + 12);
-    ctx.fillText(pl.name, d.x, d.y + r + 12);
-    ctx.save();
-    ctx.translate(d.x - 6, d.y - r + 4);
-    drawSocial(pl, time);
-    ctx.restore();
-  }
-
   function drawPads(time) {
+    if (!inView(1000, 1040, 300)) return;
     const hover = joined && !inMatch() ? me : null;
     for (const [name, pad] of Object.entries(W.PADS)) {
       const isTeam = name !== 'start';
@@ -889,7 +1100,7 @@
         fill = lobby.running ? '#8a8a8a' : '#f0a93b';
         title = lobby.running ? '⏹ Maçı Bitir' : '▶ Maçı Başlat';
         if (lobby.running) lines = ['Maç sürüyor'];
-        else if (!lobby.red.length && !lobby.blue.length) lines = ['Önce takım seç'];
+        else if (!lobby.red.length || !lobby.blue.length) lines = ['Her takımda en az 1 kişi', `${lobby.red.length} - ${lobby.blue.length}`];
         else lines = [`${lobby.red.length} - ${lobby.blue.length} oyuncu hazır`];
         if (!lobby.running && lobby.last) {
           const L = lobby.last;
@@ -927,7 +1138,7 @@
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('Takım alanına tıkla → hazırsın. Maçta: WASD/oklar hareket, Space vuruş.', 1000, 1098);
+    ctx.fillText('Takım alanına tıkla → hazırsın. Maçta: WASD/oklar hareket, Space vuruş, L: takımdan çık.', 1000, 1098);
   }
 
   function drawPings(time) {
@@ -1131,6 +1342,172 @@
     ctx.restore();
   }
 
+  // ---------- Maç çizimi ----------
+  function drawMatch(time, rp) {
+    const S = H.S;
+    const half = sim ? sim.half : 1;
+    // Kale çizgisi ve direkler: 2. devrede taraflar değiştiği için canlı çizilir
+    for (const team of ['red', 'blue']) {
+      const side = (team === 'red' ? -1 : 1) * (half === 2 ? -1 : 1);
+      const x0 = H.cx + side * H.ballAreaX * S;
+      const c = team === 'red' ? '#ffcccc' : '#ccccff';
+      ctx.strokeStyle = c;
+      ctx.lineWidth = 3 * S;
+      ctx.beginPath();
+      ctx.moveTo(x0, H.cy - H.goalY * S);
+      ctx.lineTo(x0, H.cy + H.goalY * S);
+      ctx.stroke();
+      ctx.fillStyle = c;
+      ctx.strokeStyle = '#000';
+      ctx.lineWidth = 2 * S;
+      for (const t of [-1, 1]) {
+        ctx.beginPath();
+        ctx.arc(x0, H.cy + t * H.goalY * S, H.postRadius * S, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    // Başlama vuruşu sayacı: orta yuvarlağın etrafında azalan halka
+    if (meta && lobby.running && meta.ph === 'kickoff') {
+      const k = Math.max(0, meta.tmr / (H.kickoffSeconds * HB.TPS));
+      ctx.strokeStyle = H.teams[meta.ko].color;
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.arc(H.cx, H.cy, H.kickOffRadius * S + 6, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.font = 'bold 22px Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(String(Math.ceil(meta.tmr / HB.TPS)), H.cx, H.cy - H.kickOffRadius * S + 26);
+    }
+
+    let bpos = { x: H.cx, y: H.cy };
+    if (rp) {
+      for (const [id, d] of rp) {
+        if (id === 'ball') continue;
+        const q = sim.players.get(id);
+        if (!q) continue;
+        drawDisc(players.get(id), W.toWorld(d.x, d.y), q, id === myId, time);
+      }
+      const b = rp.get('ball');
+      bpos = W.toWorld(b.x, b.y);
+    }
+    ball.x = bpos.x;
+    ball.y = bpos.y;
+    // Top (HaxBall: beyaz disk, siyah kenar)
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2 * S;
+    ctx.beginPath();
+    ctx.arc(bpos.x, bpos.y, H.ball.radius * S, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  function drawDisc(pl, d, q, isMe, time) {
+    const S = H.S, r = H.player.radius * S;
+    ctx.fillStyle = H.teams[q.team].color;
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.lineWidth = 2 * S;
+    ctx.strokeStyle = q.input & HB.INPUT.KICK ? '#fff' : '#000';
+    ctx.stroke();
+    if (isMe) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, r + 6, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (!pl) return;
+    ctx.fillStyle = '#fff';
+    ctx.font = `bold ${Math.round(13 * S)}px Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText([...pl.name].slice(0, 2).join('').toUpperCase(), d.x, d.y + 1);
+    ctx.font = `bold ${Math.round(9 * S)}px Arial, sans-serif`;
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+    ctx.lineWidth = 3;
+    ctx.strokeText(pl.name, d.x, d.y + r + 12);
+    ctx.fillText(pl.name, d.x, d.y + r + 12);
+    ctx.save();
+    ctx.translate(d.x - 6, d.y - r + 4);
+    drawSocial(pl, time);
+    ctx.restore();
+  }
+
+  // ---------- Ekran katmanı: geri sayım ve emoji menüsü ----------
+  let lastPhase = null;
+  function drawOverlay() {
+    const ph = lobby.running && meta ? meta.ph : null;
+    if (ph !== lastPhase) {
+      if (lastPhase === 'countdown' && ph === 'kickoff') announce('BAŞLA!', '#fff', `${meta.half}. Devre`);
+      lastPhase = ph;
+    }
+    if (ph === 'countdown') {
+      const n = Math.max(1, Math.ceil(meta.tmr / HB.TPS));
+      ctx.save();
+      ctx.font = '900 120px Nunito, Trebuchet MS, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 8;
+      ctx.strokeStyle = INK;
+      ctx.fillStyle = '#fff';
+      ctx.strokeText(String(n), vw / 2, vh * 0.4);
+      ctx.fillText(String(n), vw / 2, vh * 0.4);
+      ctx.font = '800 22px Nunito, Trebuchet MS, sans-serif';
+      ctx.lineWidth = 5;
+      const sub = `${meta.half}. devre başlıyor`;
+      ctx.strokeText(sub, vw / 2, vh * 0.4 + 80);
+      ctx.fillText(sub, vw / 2, vh * 0.4 + 80);
+      ctx.restore();
+    }
+    if (radial) drawRadial();
+  }
+
+  function drawRadial() {
+    const R = 82;
+    const sx = me.x - Math.round(cam.x), sy = me.y - Math.round(cam.y); // menü imleci/diski takip eder
+    ctx.save();
+    ctx.fillStyle = 'rgba(30,24,18,0.55)';
+    ctx.beginPath();
+    ctx.arc(sx, sy, R + 34, 0, Math.PI * 2);
+    ctx.arc(sx, sy, 26, 0, Math.PI * 2, true);
+    ctx.fill();
+    for (let i = 0; i < 8; i++) {
+      const a = -Math.PI / 2 + i * (Math.PI / 4);
+      const x = sx + Math.cos(a) * R, y = sy + Math.sin(a) * R;
+      const sel = radial.sel === i;
+      ctx.fillStyle = sel ? '#fff8ec' : 'rgba(255,248,236,0.18)';
+      ctx.beginPath();
+      ctx.arc(x, y, sel ? 30 : 24, 0, Math.PI * 2);
+      ctx.fill();
+      if (sel) {
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+      ctx.font = `${sel ? 34 : 26}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(quick[i], x, y + 2);
+    }
+    // Seçim yönü
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(sx + radial.vx * 0.25, sy + radial.vy * 0.25);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '700 11px Nunito, Trebuchet MS, sans-serif';
+    ctx.fillText('E: düzenle', sx, sy + R + 50);
+    ctx.restore();
+  }
+
   // ---------- Döngü ----------
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -1159,12 +1536,14 @@
   function frame(time) {
     const dt = Math.min(0.1, (time - last) / 1000);
     last = time;
-    const mv = lobby.running ? interpMatch(time - MATCH_DELAY) : null;
-    const myDisc = inMatch() && mv ? mv.p.get(myId) : null;
+    advanceSim(dt);
+    const rp = sim ? renderPositions(Math.min(1, simAcc / TICK)) : null;
+    const myDisc = inMatch() && rp ? rp.get(myId) : null;
     if (myDisc) {
       // Maçtayken "imleç" kendi diskindir; kamera onu takip eder
-      me.x = myDisc.x;
-      me.y = myDisc.y;
+      const w = W.toWorld(myDisc.x, myDisc.y);
+      me.x = w.x;
+      me.y = w.y;
       me.vx = me.vy = 0;
       inAx = inAy = 0;
     } else if (joined && !inMatch()) stepMovement(dt);
@@ -1180,14 +1559,16 @@
     if (sw > 0 && sh > 0) ctx.drawImage(bg, sx, sy, sw, sh, sx, sy, sw, sh);
     drawWater(time);
     drawPads(time);
-    drawMatch(time, mv);
+    drawMatch(time, rp);
     drawPings(time);
 
     const rt = time - INTERP_DELAY;
     for (const p of players.values()) {
       if (p.id === myId) continue;
       p.render = interp(p.snaps, rt);
-      if (p.render && !(mv && mv.p.has(p.id))) drawCursor(p, p.render.x, p.render.y, time, false);
+      if (p.render && !(sim && sim.players.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
+        drawCursor(p, p.render.x, p.render.y, time, false);
+      }
     }
     if (joined && !myDisc) {
       const self = players.get(myId) || { name: me.name, color: me.color };
@@ -1195,7 +1576,14 @@
     }
     ctx.restore();
     if (joined) drawMinimap();
+    drawOverlay();
+    updateHud();
     requestAnimationFrame(frame);
   }
+
+  function inView(x, y, m) {
+    return x > cam.x - m && x < cam.x + vw + m && y > cam.y - m && y < cam.y + vh + m;
+  }
+
   requestAnimationFrame(frame);
 })();

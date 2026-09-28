@@ -25,8 +25,12 @@
     },
     ball: { radius: 10, bCoef: 0.5, invMass: 1, damping: 0.99 },
     kickRange: 4,
-    scoreLimit: 3,
-    timeLimit: 180, // sn
+    halfSeconds: 60, // devre süresi (2 devre)
+    countdownSeconds: 3, // maç ve 2. devre başında geri sayım
+    kickoffSeconds: 5, // bu süre sonunda orta yuvarlak herkese açılır
+    forfeitSeconds: 10, // bir takım boş kalırsa hükmen bitişe kadar bekleme
+    goalSeconds: 3, // gol kutlaması
+    teamMax: 5,
     teams: {
       red: { name: 'Kırmızı', color: '#e56e56' },
       blue: { name: 'Mavi', color: '#5689e5' },
@@ -63,7 +67,14 @@
   const MAX_STEP = { land: 45, water: 22, ocean: 13, mud: 16 };
 
   const COLORS = ['#ff5a5f', '#ff9f1c', '#ffd23f', '#3ecf8e', '#2ec4f1', '#4361ee', '#9b5de5', '#f15bb5'];
-  const EMOTES = ['👋', '😂', '😮', '❤️', '🔥'];
+  // Hızlı emoji menüsünde seçilebilecek emojiler (sunucu da bu listeyle doğrular)
+  const EMOJI_PALETTE = [
+    '👋', '😂', '😮', '❤️', '🔥', '👍', '👎', '😎', '😭', '😡', '🤔', '🥳', '😴', '🤯', '🙏', '👏',
+    '💪', '🎉', '⚽', '🥅', '🏆', '💀', '👀', '🤝', '😅', '🤣', '😱', '🥶', '🫡', '🤡', '💯', '✅',
+    '❌', '⭐', '🍿', '🐐', '🚀', '💤', '😇', '🙈',
+  ];
+  const DEFAULT_QUICK = ['👋', '😂', '😮', '❤️', '🔥', '👍', '😡', '🎉'];
+  const CHAT_MAX = 80;
 
   // Deterministik süs ağaçları (bölgelere taşmayacak şekilde seçildi)
   const TREES = [
@@ -127,7 +138,7 @@
 
   return {
     W, H, SPAWN, FIELD, HAX, PADS, toWorld,
-    LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOTES, TREES,
+    LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOJI_PALETTE, DEFAULT_QUICK, CHAT_MAX, TREES,
     terrainAt, riverNearest, inEllipse, inRect, isWater,
   };
 });
