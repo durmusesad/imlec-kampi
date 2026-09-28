@@ -395,9 +395,10 @@ wss.on('connection', (ws) => {
           setTeam(me, me.team === m.pad ? null : m.pad); // aynı alana tekrar tıklamak takımdan çıkarır
         } else if (m.pad === 'start') {
           if (match) {
+            // Başlamış maçı oyuncular/izleyiciler bitiremez; sadece yönetici (ya da herkes sahadan çıkınca)
+            if (!me.admin) return notice(me, 'Maç sürüyor. Sadece yönetici bitirebilir.');
             if (Date.now() - matchStartedAt < 3000) return; // yanlışlıkla çift tıklamaya karşı
-            broadcast({ t: 'notice', text: `${me.name} maçı bitirdi.` });
-            stopMatch();
+            moderate(me, 'stop');
           } else if (!teamIds('red').length || !teamIds('blue').length) {
             notice(me, 'Başlatmak için her takımda en az 1 oyuncu olmalı.');
           } else startMatch();

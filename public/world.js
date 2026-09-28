@@ -28,7 +28,6 @@
     halfSeconds: 60, // devre süresi (2 devre)
     countdownSeconds: 3, // maç ve 2. devre başında geri sayım
     kickoffSeconds: 5, // bu süre sonunda orta yuvarlak herkese açılır
-    forfeitSeconds: 10, // bir takım boş kalırsa hükmen bitişe kadar bekleme
     goalSeconds: 3, // gol kutlaması
     teamMax: 5,
     teams: {

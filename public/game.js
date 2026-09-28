@@ -517,8 +517,7 @@
         break;
       case 'end': {
         const t = m.winner ? H.teams[m.winner] : null;
-        const sub = m.reason === 'forfeit' ? 'Rakip takım boş kaldı — hükmen galibiyet'
-          : m.reason === 'empty' ? 'Oyuncu kalmadı' : `${m.score.red} - ${m.score.blue}`;
+        const sub = m.reason === 'empty' ? 'Sahada oyuncu kalmadı' : `${m.score.red} - ${m.score.blue}`;
         if (m.reason === 'empty') announce('Maç bitti', '#fff', sub);
         else announce(t ? `${t.name} kazandı!` : 'Berabere!', t ? t.color : '#fff', sub);
         break;
@@ -742,11 +741,8 @@
       const mm = String(Math.floor(left / 60)).padStart(2, '0');
       const ss = String(left % 60).padStart(2, '0');
       let msg = '';
-      const ffLeft = Math.ceil((H.forfeitSeconds * HB.TPS - g.ff) / HB.TPS);
-      if (g.ff > 0) {
-        const empty = g.p.some((q) => q[1] === 0) ? H.teams.blue.name : H.teams.red.name;
-        msg = `${empty} takımda oyuncu yok — ${ffLeft} sn içinde kimse katılmazsa maç hükmen biter`;
-      }
+      const hasRed = g.p.some((q) => q[1] === 0), hasBlue = g.p.some((q) => q[1] === 1);
+      if (hasRed !== hasBlue) msg = `${hasRed ? H.teams.blue.name : H.teams.red.name} takımda oyuncu yok — katılmak için takım alanına tıkla`;
       key = [g.s[0], g.s[1], g.half, mm, ss, msg].join('|');
       if (key !== hudKey) {
         $('sRed').textContent = g.s[0];
@@ -1320,8 +1316,8 @@
         if (!lines.length) lines = ['(boş — tıkla, katıl)'];
       } else {
         fill = lobby.running ? '#8a8a8a' : '#f0a93b';
-        title = lobby.running ? '⏹ Maçı Bitir' : '▶ Maçı Başlat';
-        if (lobby.running) lines = ['Maç sürüyor'];
+        title = !lobby.running ? '▶ Maçı Başlat' : isAdmin ? '⏹ Maçı Bitir' : '⚽ Maç sürüyor';
+        if (lobby.running) lines = isAdmin ? ['Yönetici olarak bitir'] : ['Sadece yönetici bitirebilir'];
         else if (!lobby.red.length || !lobby.blue.length) lines = ['Her takımda en az 1 kişi', `${lobby.red.length} - ${lobby.blue.length}`];
         else lines = [`${lobby.red.length} - ${lobby.blue.length} oyuncu hazır`];
         if (!lobby.running && lobby.last) {

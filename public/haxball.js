@@ -51,7 +51,6 @@
       this.kickoffTeam = 'red';
       this.firstKickoff = 'red';
       this.lastTouch = null;
-      this.forfeit = 0; // boş takım bekleme sayacı
       this.winner = null;
       this.reason = null;
     }
@@ -250,19 +249,9 @@
       }
     }
 
-    // Bir takım boşalırsa bekle; süre dolarsa hükmen bitir
+    // Erken bitişin tek kuralı: sahada hiç oyuncu kalmazsa maç biter (yönetici ayrıca bitirebilir)
     checkTeams(events) {
-      const r = this.teamSize('red'), b = this.teamSize('blue');
-      if (!r && !b) return this.finish(events, 'empty');
-      if (r && b) {
-        this.forfeit = 0;
-        return;
-      }
-      this.forfeit++;
-      if (this.forfeit >= HAX.forfeitSeconds * TPS) {
-        this.winner = r ? 'red' : 'blue';
-        this.finish(events, 'forfeit', this.winner);
-      }
+      if (!this.teamSize('red') && !this.teamSize('blue')) this.finish(events, 'empty');
     }
 
     finish(events, reason, winner) {
@@ -312,7 +301,7 @@
       const b = this.ball;
       return {
         n: this.tick, ph: this.phase, tmr: this.timer, half: this.half, tk: this.ticks,
-        s: [this.score.red, this.score.blue], ko: this.kickoffTeam, ff: this.forfeit,
+        s: [this.score.red, this.score.blue], ko: this.kickoffTeam,
         b: [r(b.x), r(b.y), r(b.vx), r(b.vy)], p,
       };
     }
@@ -340,7 +329,6 @@
       this.ticks = g.tk;
       this.score = { red: g.s[0], blue: g.s[1] };
       this.kickoffTeam = g.ko;
-      this.forfeit = g.ff;
     }
   }
 
