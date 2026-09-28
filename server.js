@@ -6,6 +6,8 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const WORLD = require('./public/world.js');
 const { Match } = require('./public/haxball.js');
+const TRACK = require('./public/track.js');
+const RC = require('./public/racing.js');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC = path.join(__dirname, 'public');
@@ -125,6 +127,11 @@ function moderate(admin, action, target, minutes) {
       try { target.ws.close(4001, 'atildi'); } catch {}
       return null;
     case 'spec':
+      if (target.racer) {
+        setRacer(target, false);
+        notice(target, 'Yönetici seni yarıştan çıkardı.');
+        return `${target.name} yarıştan çıkarıldı.`;
+      }
       if (!target.team) return `${target.name} zaten bir takımda değil.`;
       setTeam(target, null);
       notice(target, 'Yönetici seni izleyiciye aldı.');
@@ -138,6 +145,11 @@ function moderate(admin, action, target, minutes) {
       if (match) return 'Maç zaten sürüyor.';
       if (!teamIds('red').length || !teamIds('blue').length) return 'Her takımda en az 1 oyuncu olmalı.';
       startMatch();
+      return null;
+    case 'stoprace':
+      if (!race) return 'Şu an yarış yok.';
+      broadcast({ t: 'notice', text: 'Yönetici yarışı bitirdi.' });
+      stopRace();
       return null;
     case 'clearchat':
       chatLog = [];
@@ -163,10 +175,10 @@ function chatCommand(me, text) {
     return;
   }
   let action, target = null, minutes = 0;
-  const map = { sustur: 'mute', coz: 'unmute', çöz: 'unmute', at: 'kick', izleyici: 'spec', bitir: 'stop', baslat: 'start', başlat: 'start', temizle: 'clearchat' };
+  const map = { sustur: 'mute', coz: 'unmute', çöz: 'unmute', at: 'kick', izleyici: 'spec', bitir: 'stop', baslat: 'start', başlat: 'start', temizle: 'clearchat', yarisbitir: 'stoprace', yarışbitir: 'stoprace' };
   action = map[c];
   if (!action) {
-    notice(me, 'Komutlar: /sustur isim [dk] · /coz isim · /at isim · /izleyici isim · /bitir · /baslat · /temizle');
+    notice(me, 'Komutlar: /sustur isim [dk] · /coz isim · /at isim · /izleyici isim · /bitir · /baslat · /yarisbitir · /temizle');
     return;
   }
   if (['mute', 'unmute', 'kick', 'spec'].includes(action)) {
@@ -182,6 +194,10 @@ function chatCommand(me, text) {
   if (res) notice(me, res);
 }
 let nextId = 1;
+let race = null; // yürüyen F1 yarışı
+let raceStartedAt = 0;
+let raceEndAt = 0;
+let lastRace = null; // son yarışın sonuçları
 let match = null; // yürüyen HaxBall maçı
 let matchStartedAt = 0;
 let lastResult = null; // son biten maç
@@ -230,8 +246,15 @@ function teamIds(team) {
   return ids;
 }
 
+function racerIds() {
+  return [...players.values()].filter((p) => p.racer).sort((a, b) => a.racerAt - b.racerAt).map((p) => p.id);
+}
+
 function lobbyState() {
-  return { t: 'lobby', red: teamIds('red'), blue: teamIds('blue'), running: !!match, last: lastResult };
+  return {
+    t: 'lobby', red: teamIds('red'), blue: teamIds('blue'), running: !!match, last: lastResult,
+    racers: racerIds(), raceRunning: !!race, raceLast: lastRace,
+  };
 }
 
 function broadcastLobby() {
@@ -266,7 +289,7 @@ function startMatch() {
   lastResult = null;
   for (const p of players.values()) {
     if (!p.team) continue;
-    p.queue = [];
+    chan(p, 'm').queue = [];
     match.addPlayer(p.id, p.team);
   }
   broadcastLobby();
@@ -287,20 +310,87 @@ function setTeam(p, team) {
     notice(p, `${HAX.teams[team].name} takım dolu (en fazla ${HAX.teamMax} kişi).`);
     return;
   }
+  if (team && p.racer) {
+    if (race && race.cars.has(p.id)) return notice(p, 'Yarıştasın; önce L ile yarıştan çık.');
+    p.racer = false;
+  }
   if (match && old) {
     match.removePlayer(p.id);
     teleportOut(p, old);
   }
   p.team = team;
-  p.queue = [];
+  chan(p, 'm').queue = [];
   if (match && team) match.addPlayer(p.id, team);
   broadcastLobby();
+}
+
+// ---------- F1 yarışı ----------
+function setRacer(p, on) {
+  if (on === !!p.racer) return;
+  if (on) {
+    if (race) return notice(p, 'Yarış sürüyor, bitince katılabilirsin.');
+    if (racerIds().length >= RC.MAX_CARS) return notice(p, `Yarış dolu (en fazla ${RC.MAX_CARS} araç).`);
+    if (p.team) {
+      if (match && match.players.has(p.id)) return notice(p, 'Maçtasın; önce L ile maçtan çık.');
+      setTeam(p, null);
+    }
+    p.racer = true;
+    p.racerAt = Date.now();
+  } else {
+    p.racer = false;
+    if (race && race.cars.has(p.id)) {
+      race.removeCar(p.id);
+      teleportToRacePads(p);
+    }
+  }
+  broadcastLobby();
+}
+
+function teleportToRacePads(p) {
+  const pad = TRACK.PADS.join;
+  p.x = pad.x + pad.w / 2;
+  p.y = pad.y + pad.h + 50;
+  send(p.ws, { t: 'tp', x: p.x, y: p.y });
+}
+
+function syncCursorToCar(p) {
+  const c = race && race.cars.get(p.id);
+  if (!c) return;
+  p.x = c.x;
+  p.y = c.y;
+}
+
+function startRace() {
+  race = new RC.Race();
+  race.seed = (Date.now() & 0xffff) + 1;
+  raceStartedAt = Date.now();
+  lastRace = null;
+  racerIds().forEach((id, slot) => {
+    const p = players.get(id);
+    chan(p, 'r').queue = [];
+    race.addCar(id, p.color, slot);
+  });
+  broadcastLobby();
+  broadcastRace();
+}
+
+function stopRace() {
+  if (!race) return;
+  for (const p of players.values()) syncCursorToCar(p);
+  race = null;
+  broadcastLobby();
+}
+
+function broadcastRace() {
+  if (race) broadcast({ t: 'rg', ...race.snapshot((id) => { const p = players.get(id); const c = p && chan(p, 'r'); return c ? [c.ack, c.buf] : [0, 2]; }) });
 }
 
 function removePlayer(p) {
   players.delete(p.id);
   delete scores[p.id];
   if (match) match.removePlayer(p.id);
+  if (race) race.removeCar(p.id);
+  if (p.racer) broadcastLobby();
   broadcast({ t: 'leave', id: p.id });
   if (p.team) broadcastLobby();
 }
@@ -334,7 +424,7 @@ wss.on('connection', (ws) => {
         me = restored;
         me.ws = ws;
         me.ghostUntil = 0;
-        me.queue = [];
+        for (const k of ['m', 'r']) chan(me, k).queue = [];
         me.afk = me.typing = false;
       } else {
         if (players.size >= MAX_PLAYERS) {
@@ -367,6 +457,7 @@ wss.on('connection', (ws) => {
       send(ws, lobbyState());
       if (me.admin) broadcastMuted();
       if (match) send(ws, { t: 'g', ...match.snapshot(ackOf) });
+      if (race) broadcastRace();
       broadcast({ t: 'join', p: publicPlayer(me) }, me.id); // geri dönende isim/renk değişmiş olabilir
       return;
     }
@@ -376,16 +467,35 @@ wss.on('connection', (ws) => {
       case 'pos': {
         if (!num(m.x) || !num(m.y)) return;
         if (match && match.players.has(me.id)) return; // maçtayken konumu disk belirler
+        if (race && race.cars.has(me.id)) return; // yarıştayken konumu araç belirler
         me.x = clamp(m.x, 0, WORLD.W);
         me.y = clamp(m.y, 0, WORLD.H);
         break;
       }
-      case 'i': {
-        // Maç girdisi: her istemci tick'i için bir tane; sunucu her tick'te bir tane uygular
-        if (!match || !match.players.has(me.id) || !num(m.s) || !num(m.k)) return;
-        me.queue.push([m.s, m.k & 31]);
-        me.lastInputAt = Date.now();
-        if (me.queue.length > 8) me.queue.splice(0, me.queue.length - 8); // gecikme birikmesin
+      case 'i':
+      case 'ri': {
+        // Maç/yarış girdisi: her istemci tick'i için bir tane; sunucu her tick'te bir tane uygular
+        const isRace = m.t === 'ri';
+        if (!num(m.s) || !num(m.k)) return;
+        if (isRace ? !(race && race.cars.has(me.id)) : !(match && match.players.has(me.id))) return;
+        const c = chan(me, isRace ? 'r' : 'm');
+        c.queue.push([m.s, m.k & 31]);
+        c.lastInputAt = Date.now();
+        if (c.queue.length > 8) c.queue.splice(0, c.queue.length - 8); // gecikme birikmesin
+        break;
+      }
+      case 'rpad': {
+        const pad = TRACK.PADS[m.pad];
+        if (!pad || !onPad(me, pad) || !allow(me, 'pad', 3, 1000)) return;
+        if (m.pad === 'join') setRacer(me, !me.racer);
+        else if (m.pad === 'start') {
+          if (race) {
+            if (!me.admin) return notice(me, 'Yarış sürüyor. Sadece yönetici bitirebilir.');
+            if (Date.now() - raceStartedAt < 3000) return;
+            moderate(me, 'stoprace');
+          } else if (!racerIds().length) notice(me, 'Önce yarışa katılan olmalı.');
+          else startRace();
+        }
         break;
       }
       case 'pad': {
@@ -406,7 +516,8 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'leave': {
-        if (me.team) setTeam(me, null);
+        if (me.racer) setRacer(me, false);
+        else if (me.team) setTeam(me, null);
         break;
       }
       case 'status': {
@@ -503,9 +614,10 @@ wss.on('connection', (ws) => {
     }
     // Beklenmedik kopma (wifi, Cloud Run 60 dk sınırı): kısa süre yerini koru ama imlecini gizle
     me.ws = null;
-    me.queue = [];
+    for (const k of ['m', 'r']) chan(me, k).queue = [];
     me.ghostUntil = Date.now() + RECONNECT_GRACE;
     if (match) match.setInput(me.id, 0);
+    if (race) race.setInput(me.id, 0);
     broadcast({ t: 'away', id: me.id });
   });
 });
@@ -526,66 +638,69 @@ setInterval(() => {
   for (const p of [...players.values()]) if (!p.ws && p.ghostUntil && now > p.ghostUntil) removePlayer(p);
 }, 1000);
 
-// ---------- Maç döngüsü (60 Hz, otoriter) ----------
+// ---------- Oyun döngüsü (60 Hz, otoriter) ----------
+// Uyarlamalı girdi tamponu sınırları (adım) ve ölçüm penceresi (ms)
+const BUF_MIN = +(process.env.BUF_MIN || 2);
+const BUF_MAX = +(process.env.BUF_MAX || 3);
+const BUF_WINDOW = 1500;
+
+// Her oyuncunun maç ('m') ve yarış ('r') için ayrı girdi kanalı
+function chan(p, name) {
+  const k = 'ch_' + name;
+  if (!p[k]) p[k] = { queue: [], ack: 0, buf: BUF_MIN, minQ: Infinity, winAt: Date.now(), starves: [], lastInputAt: 0 };
+  return p[k];
+}
+
+// Sıradaki girdiyi uygula. Uyarlamalı tampon: ağ dalgalanıp kuyruk sık boşalırsa daha çok girdi biriktir
+// (tahmin bozulmasın), ağ sakinleşince küçült (gecikme azalsın)
+function pullInput(p, c, now, set) {
+  if (!p.ws || now - c.lastInputAt > 250) {
+    // Bağlantı yok ya da istemci girdi göndermeyi kesti (sekme arka planda): tuşlar bırakılmış sayılır
+    set(0);
+    c.queue.length = 0;
+    return;
+  }
+  const next = c.queue.shift();
+  if (next) {
+    c.ack = next[0];
+    set(next[1]);
+  } else {
+    // Tek bir gecikme sıçraması tamponu büyütmesin (giriş gecikmesi artmasın); sık tekrarlarsa büyüt
+    c.starves = c.starves.filter((t) => now - t < BUF_WINDOW);
+    c.starves.push(now);
+    if (c.starves.length >= 3) {
+      c.buf = Math.min(BUF_MAX, c.buf + 1);
+      c.starves = [];
+    }
+  }
+  c.minQ = Math.min(c.minQ, c.queue.length);
+  if (now - c.winAt > BUF_WINDOW) {
+    if (c.minQ >= 1 && !c.starves.length && c.buf > BUF_MIN) c.buf--;
+    c.minQ = Infinity;
+    c.winAt = now;
+  }
+  // Tamponu aşan fazlalık gecikme demektir; atılan girdideki vuruş basışı korunur
+  while (c.queue.length > c.buf) {
+    const drop = c.queue.shift();
+    c.queue[0][1] |= drop[1] & 16;
+  }
+}
+
 function ackOf(id) {
   const p = players.get(id);
-  return p ? [p.ack, p.buf || 2] : [0, 2];
+  const c = p && chan(p, 'm');
+  return c ? [c.ack, c.buf] : [0, 2];
 }
 
 function broadcastMatch() {
   if (match) broadcast({ t: 'g', ...match.snapshot(ackOf) });
 }
 
-// Uyarlamalı girdi tamponu sınırları (adım) ve ölçüm penceresi (ms)
-const BUF_MIN = +(process.env.BUF_MIN || 2);
-const BUF_MAX = +(process.env.BUF_MAX || 3);
-const BUF_WINDOW = 1500;
-
 let endAt = 0;
-function step() {
-  // Her oyuncu için sıradaki girdiyi uygula; kuyruk boşsa son girdi kısa süre devam eder
-  const now = Date.now();
+function stepMatch(now) {
   for (const d of match.players.values()) {
     const p = players.get(d.id);
-    if (!p) continue;
-    if (!p.ws || now - (p.lastInputAt || 0) > 250) {
-      // Bağlantı yok ya da istemci girdi göndermeyi kesti (sekme arka planda): tuşlar bırakılmış sayılır
-      match.setInput(d.id, 0);
-      p.queue.length = 0;
-      continue;
-    }
-    // Uyarlamalı tampon: ağ dalgalanıp kuyruk boşalırsa bu oyuncu için daha çok girdi biriktirilir
-    // (tahmin bozulmasın), ağ sakinleşince tampon küçültülür (gecikme azalsın)
-    if (p.buf == null) {
-      p.buf = BUF_MIN;
-      p.minQ = Infinity;
-      p.winAt = now;
-      p.starves = [];
-    }
-    const next = p.queue.shift();
-    if (next) {
-      p.ack = next[0];
-      match.setInput(d.id, next[1]);
-    } else {
-      // Tek bir gecikme sıçraması tamponu büyütmesin (giriş gecikmesi artmasın); sık tekrarlarsa büyüt
-      p.starves = p.starves.filter((t) => now - t < BUF_WINDOW);
-      p.starves.push(now);
-      if (p.starves.length >= 3) {
-        p.buf = Math.min(BUF_MAX, p.buf + 1);
-        p.starves = [];
-      }
-    }
-    p.minQ = Math.min(p.minQ, p.queue.length);
-    if (now - p.winAt > BUF_WINDOW) {
-      if (p.minQ >= 1 && !p.starves.length && p.buf > BUF_MIN) p.buf--;
-      p.minQ = Infinity;
-      p.winAt = now;
-    }
-    // Tamponu aşan fazlalık gecikme demektir; atılan girdideki vuruş basışı korunur
-    while (p.queue.length > p.buf) {
-      const drop = p.queue.shift();
-      p.queue[0][1] |= drop[1] & 16;
-    }
+    if (p) pullInput(p, chan(p, 'm'), now, (k) => match.setInput(d.id, k));
   }
   const events = match.step();
   for (const ev of events) {
@@ -602,26 +717,55 @@ function step() {
   }
 }
 
+function stepRace(now) {
+  for (const c of race.cars.values()) {
+    const p = players.get(c.id);
+    if (p) pullInput(p, chan(p, 'r'), now, (k) => race.setInput(c.id, k));
+  }
+  const events = race.step();
+  for (const ev of events) {
+    if (ev.type === 'lights') broadcast({ t: 'rlights' });
+    else if (ev.type === 'go') broadcast({ t: 'rgo' });
+    else if (ev.type === 'lap') broadcast({ t: 'rlap', id: ev.id, lap: ev.lap, time: ev.time });
+    else if (ev.type === 'finish') broadcast({ t: 'rfinish', id: ev.id, pos: ev.pos, time: ev.time });
+    else if (ev.type === 'end') {
+      const names = {};
+      for (const r of ev.results) names[r.id] = (players.get(r.id) || {}).name || '?';
+      lastRace = { reason: ev.reason, results: ev.results.map((r) => ({ ...r, name: names[r.id] })) };
+      broadcast({ t: 'rend', ...lastRace });
+      raceEndAt = Date.now() + (ev.reason === 'empty' ? 1000 : 10000);
+    }
+  }
+}
+
 // Sabit adımlı döngü: setInterval ms'ye yuvarladığı için tick'ler gerçek zamana göre sayılır
 const TICK_MS = 1000 / 60;
 let nextTick = performance.now();
 setInterval(() => {
   const now = performance.now();
-  if (!match) {
+  if (!match && !race) {
     nextTick = now;
     return;
   }
   if (now - nextTick > 250) nextTick = now; // uzun duraklamadan sonra yetişmeye çalışma
-  let broadcastDue = false;
-  while (match && nextTick <= now) {
-    step();
+  let stepped = false;
+  const wall = Date.now();
+  while ((match || race) && nextTick <= now) {
+    if (match) stepMatch(wall);
+    if (race) stepRace(wall);
     nextTick += TICK_MS;
-    broadcastDue = true; // 60 Hz tam durum
+    stepped = true;
   }
-  if (!match) return;
-  for (const p of players.values()) syncCursorToDisc(p);
-  if (broadcastDue) broadcastMatch();
-  if (match.phase === 'ended' && Date.now() >= endAt) stopMatch();
+  if (match) {
+    for (const p of players.values()) syncCursorToDisc(p);
+    if (stepped) broadcastMatch();
+    if (match.phase === 'ended' && Date.now() >= endAt) stopMatch();
+  }
+  if (race) {
+    for (const p of players.values()) syncCursorToCar(p);
+    if (stepped) broadcastRace();
+    if (race.phase === 'ended' && Date.now() >= raceEndAt) stopRace();
+  }
 }, 4);
 
 // ---------- İmleç yayını (30 Hz) ----------

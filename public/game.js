@@ -186,11 +186,17 @@
       pickRadial();
       return;
     }
-    if (inMatch()) return;
+    if (inMatch() || inRace()) return;
     // Sol tık sadece etkileşimli alanlarda bir şey yapar (boş yere tıklamak hiçbir şey göndermez)
     for (const [name, pad] of Object.entries(W.PADS)) {
       if (W.inRect(me.x, me.y, pad)) {
         send({ t: 'pad', pad: name });
+        return;
+      }
+    }
+    for (const [name, pad] of Object.entries(TR.PADS)) {
+      if (W.inRect(me.x, me.y, pad)) {
+        send({ t: 'rpad', pad: name });
         return;
       }
     }
@@ -232,6 +238,11 @@
       pending.push([seq, 0]);
       send({ t: 'i', s: seq, k: 0 });
     }
+    if (inRace() && rsim) {
+      rseq++;
+      rpending.push([rseq, 0]);
+      send({ t: 'ri', s: rseq, k: 0 });
+    }
   }
   addEventListener('blur', releaseAll);
   document.addEventListener('visibilitychange', () => {
@@ -241,7 +252,7 @@
 
   document.addEventListener('keydown', (e) => {
     if (!joined || chatting || !locked) return; // normal modda tuşlar siteye gitmez
-    const playing = inMatch();
+    const playing = inMatch() || inRace();
     if (KEYMAP[e.code] && playing) {
       e.preventDefault();
       keys.add(e.code);
@@ -258,7 +269,7 @@
         openChat();
         return;
       case 'KeyL':
-        if (myTeam()) send({ t: 'leave' });
+        if (myTeam() || (lobby.racers || []).includes(myId)) send({ t: 'leave' });
         return;
       case 'KeyE':
         openEmojiPanel();
@@ -487,13 +498,15 @@
         }
         break;
       case 'lobby': {
-        const wasIn = inMatch();
+        const wasIn = inMatch(), wasRace = inRace();
         lobby = m;
         document.body.classList.toggle('in-match', inMatch());
+        document.body.classList.toggle('in-race', inRace());
         if (!m.running) resetMatchView();
-        if (wasIn !== inMatch()) {
-          flashKeys(); // maça girince/çıkınca ilgili tuşları kısaca göster
-          keys.clear(); // sadece kendi maç durumum değişince; başkası takım değiştirince tuşlarım bırakılmasın
+        if (!m.raceRunning) resetRaceView();
+        if (wasIn !== inMatch() || wasRace !== inRace()) {
+          flashKeys(); // maça/yarışa girince/çıkınca ilgili tuşları kısaca göster
+          keys.clear(); // sadece kendi durumum değişince; başkası takım değiştirince tuşlarım bırakılmasın
         }
         renderPlayerList();
         updateHud();
@@ -501,6 +514,29 @@
       }
       case 'g':
         onSnapshot(m);
+        break;
+      case 'rg':
+        onRaceSnapshot(m);
+        break;
+      case 'rlights':
+        lightsAt = performance.now();
+        goAt = 0;
+        break;
+      case 'rgo':
+        goAt = performance.now();
+        if (inRace() || nearTrack()) announce('BAŞLA!', '#fff', 'Istanbul Park · ' + RC.LAPS + ' tur');
+        break;
+      case 'rlap':
+        if (m.id === myId) toast(`Tur ${m.lap} bitti · ${fmtTime(m.time)}`);
+        break;
+      case 'rfinish': {
+        const p = players.get(m.id);
+        if (m.id === myId) announce(`${m.pos}. oldun!`, '#fff', fmtTime(m.time));
+        else if (p && (inRace() || nearTrack())) toast(`🏁 ${p.name} ${m.pos}. olarak bitirdi`);
+        break;
+      }
+      case 'rend':
+        showRaceResults(m);
         break;
       case 'tp':
         me.x = m.x;
@@ -693,6 +729,415 @@
     }
   }
 
+  // ---------- F1 yarışı ----------
+  const RC = window.RACING, TR = window.TRACK;
+  let rsim = null, rmeta = null, racc = 0, rseq = 0, rpending = [], rprev = new Map();
+  const roffsets = new Map();
+  let rDelay = 2;
+  let lightsAt = 0, goAt = 0; // yerel zaman (ışıklar ve start)
+  const skids = []; // lastik izleri (yerel görsel efekt)
+  let lastRr = null;
+
+  function inRace() {
+    return !!lobby.raceRunning && myId != null && (lobby.racers || []).includes(myId);
+  }
+  function nearTrack() {
+    const R = TR.REGION;
+    return cam.x + vw > R.x && cam.x < R.x + R.w && cam.y + vh > R.y && cam.y < R.y + R.h;
+  }
+  function resetRaceView() {
+    rsim = null;
+    rmeta = null;
+    rpending = [];
+    roffsets.clear();
+    rprev = new Map();
+    racc = 0;
+  }
+  function fmtTime(ticks) {
+    const t = ticks / RC.TPS, m = Math.floor(t / 60), sec = t - m * 60;
+    return `${m}:${sec < 10 ? '0' : ''}${sec.toFixed(1)}`;
+  }
+
+  function rPositions() {
+    const m = new Map();
+    for (const c of rsim.cars.values()) m.set(c.id, { x: c.x, y: c.y, a: c.a });
+    return m;
+  }
+  function rStep(bits) {
+    rprev = rPositions();
+    if (bits != null) rsim.setInput(myId, bits);
+    rsim.step(true);
+  }
+  // Kareler arası ara konum + düzeltme sapması (yön açısı da ara değerlenir)
+  function raceRender(alpha, noOffset) {
+    const out = new Map();
+    if (!rsim) return out;
+    for (const c of rsim.cars.values()) {
+      const p = rprev.get(c.id) || c;
+      const o = noOffset ? null : roffsets.get(c.id);
+      let da = c.a - p.a;
+      while (da > Math.PI) da -= 2 * Math.PI;
+      while (da < -Math.PI) da += 2 * Math.PI;
+      out.set(c.id, {
+        x: p.x + (c.x - p.x) * alpha + (o ? o.x : 0), y: p.y + (c.y - p.y) * alpha + (o ? o.y : 0),
+        a: p.a + da * alpha, car: c,
+      });
+    }
+    return out;
+  }
+  // Futboldaki tahmin sistemiyle aynı: sunucu durumu gelince onaylanmamış girdiler yeniden oynatılır
+  function onRaceSnapshot(g) {
+    rmeta = g;
+    if (!lobby.raceRunning) return;
+    if (!rsim) {
+      rsim = new RC.Race();
+      rsim.load(g);
+      rpending = [];
+      rprev = rPositions();
+      return;
+    }
+    const alpha = Math.min(1, racc / TICK);
+    const before = raceRender(alpha, true);
+    rsim.load(g);
+    const mine = g.p.find((q) => q[0] === myId);
+    if (mine) {
+      const ack = mine[15];
+      const want = Math.max(2, Math.min(3, mine[16] || 2));
+      if (want > rDelay) rDelay++;
+      else if (want < rDelay) rDelay--;
+      rpending = rpending.filter(([sq]) => sq > ack);
+      if (rpending.length > 90) rpending = rpending.slice(-90);
+      const upto = Math.max(0, rpending.length - rDelay);
+      for (let i = 0; i < upto; i++) rStep(rpending[i][1]);
+      if (!upto) rprev = rPositions();
+    } else {
+      rpending = [];
+      rprev = rPositions();
+    }
+    const after = raceRender(alpha, true);
+    for (const [id, a] of after) {
+      const b = before.get(id);
+      if (!b) continue;
+      const o = roffsets.get(id) || { x: 0, y: 0 };
+      o.x += b.x - a.x;
+      o.y += b.y - a.y;
+      if (Math.hypot(o.x, o.y) > 80) { o.x = 0; o.y = 0; }
+      roffsets.set(id, o);
+    }
+  }
+  function advanceRace(dt) {
+    if (!rsim) return;
+    const playing = inRace() && rsim.cars.has(myId);
+    racc += dt;
+    let steps = 0;
+    while (racc >= TICK && steps < 6) {
+      racc -= TICK;
+      steps++;
+      if (playing) {
+        const k = inputBits() & 15;
+        rseq++;
+        rpending.push([rseq, k]);
+        send({ t: 'ri', s: rseq, k });
+        rStep(rpending.length > rDelay ? rpending[rpending.length - 1 - rDelay][1] : null);
+      } else rStep(null);
+    }
+    if (steps === 6) racc = 0;
+    const decay = Math.exp(-dt * 12);
+    for (const o of roffsets.values()) { o.x *= decay; o.y *= decay; }
+  }
+
+  // Sıralama (tarayıcıdaki tahmini duruma göre)
+  function raceStandings() {
+    if (!rsim) return [];
+    const L = TR.LENGTH;
+    return [...rsim.cars.values()].sort((a, b) => {
+      if (a.finished && b.finished) return a.finished - b.finished;
+      if (a.finished) return -1;
+      if (b.finished) return 1;
+      return ((b.lap - 1) * L + (b.s || 0)) - ((a.lap - 1) * L + (a.s || 0));
+    });
+  }
+
+  function drawRacePads() {
+    if (!inView(TR.PADS.join.x + 250, TR.PADS.join.y, 500)) return;
+    const hover = joined && !inMatch() && !inRace() ? me : null;
+    const racers = lobby.racers || [];
+    const running = !!lobby.raceRunning;
+    const names = racers.map((id) => (players.get(id) || {}).name).filter(Boolean);
+    const pads = [
+      ['join', '#2e7d32', (racers.includes(myId) ? '✓ ' : '') + '🏎️ Yarışa Katıl', names.length ? names : ['(boş — tıkla, katıl)']],
+      ['start', running ? '#8a8a8a' : '#f0a93b',
+        !running ? '▶ Yarışı Başlat' : isAdmin ? '⏹ Yarışı Bitir' : '🏁 Yarış sürüyor',
+        running ? [isAdmin ? 'Yönetici olarak bitir' : 'Sadece yönetici bitirebilir'] : [`${racers.length} pilot hazır · ${RC.LAPS} tur`]],
+    ];
+    for (const [name, fill, title, lines] of pads) {
+      const pad = TR.PADS[name];
+      const over = hover && W.inRect(hover.x, hover.y, pad);
+      ctx.save();
+      if (over) {
+        ctx.translate(pad.x + pad.w / 2, pad.y + pad.h / 2);
+        ctx.scale(1.04, 1.04);
+        ctx.translate(-(pad.x + pad.w / 2), -(pad.y + pad.h / 2));
+      }
+      ctx.fillStyle = INK;
+      roundRect(ctx, pad.x + 4, pad.y + 5, pad.w, pad.h, 14);
+      ctx.fill();
+      ctx.fillStyle = fill;
+      roundRect(ctx, pad.x, pad.y, pad.w, pad.h, 14);
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      ctx.font = 'bold 19px Nunito, Trebuchet MS, sans-serif';
+      ctx.fillText(title, pad.x + pad.w / 2, pad.y + 10);
+      ctx.font = '600 13px Nunito, Trebuchet MS, sans-serif';
+      const shown = lines.slice(0, 3);
+      if (lines.length > 3) shown[2] = `+${lines.length - 2} kişi`;
+      shown.forEach((l, i) => ctx.fillText(l, pad.x + pad.w / 2, pad.y + 38 + i * 16));
+      ctx.restore();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.font = '800 16px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('🏁 Istanbul Park · F1', (TR.PADS.join.x + TR.PADS.start.x + TR.PADS.start.w) / 2, TR.PADS.join.y - 8);
+  }
+
+  function drawSkids(time) {
+    for (let i = skids.length - 1; i >= 0; i--) {
+      const k = (time - skids[i][4]) / 5000;
+      if (k >= 1) { skids.splice(i, 1); continue; }
+      const [x1, y1, x2, y2] = skids[i];
+      if (!inView(x1, y1, 20)) continue;
+      ctx.strokeStyle = `rgba(20,20,20,${0.28 * (1 - k)})`;
+      ctx.lineWidth = 2.4;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+  }
+
+  // Üstten F1 aracı: gövde oyuncu renginde, siyah lastikler, ön/arka kanat, kokpit
+  function drawCar(d, pl, isMe, time) {
+    const c = d.car;
+    if (!inView(d.x, d.y, 80)) return;
+    const color = pl ? pl.color : '#cfcfcf';
+    // Lastik izi: araç yana kayıyorsa
+    const fx = Math.cos(d.a), fy = Math.sin(d.a);
+    const lat = Math.abs(-c.vx * fy + c.vy * fx);
+    if (lat > 0.55 && c.lastSkid) {
+      for (const side of [-6.5, 6.5]) {
+        const rx = d.x - fx * 8 - fy * side, ry = d.y - fy * 8 + fx * side;
+        const px = c.lastSkid.x - fx * 8 - fy * side, py = c.lastSkid.y - fy * 8 + fx * side;
+        if (Math.hypot(rx - px, ry - py) < 20) skids.push([px, py, rx, ry, time]);
+      }
+      if (skids.length > 1500) skids.splice(0, skids.length - 1500);
+    }
+    c.lastSkid = { x: d.x, y: d.y };
+
+    ctx.save();
+    ctx.translate(d.x, d.y);
+    // Rüzgar arkası: aracın iki yanında hava çizgileri
+    if (c.slip > 0.15) {
+      ctx.save();
+      ctx.rotate(d.a);
+      ctx.strokeStyle = `rgba(255,255,255,${0.25 + 0.35 * c.slip})`;
+      ctx.lineWidth = 1.4;
+      const ph = (time / 60) % 12;
+      for (const yy of [-9, 9]) {
+        ctx.beginPath();
+        ctx.moveTo(10 - ph, yy);
+        ctx.lineTo(-6 - ph, yy);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    ctx.save();
+    ctx.rotate(d.a);
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    roundRect(ctx, -12, -4, 27, 12, 4);
+    ctx.fill();
+    ctx.fillStyle = '#161616';
+    ctx.fillRect(-11.5, -8.6, 6.4, 3.6); // arka lastikler
+    ctx.fillRect(-11.5, 5, 6.4, 3.6);
+    ctx.fillRect(5, -7.8, 5, 3); // ön lastikler
+    ctx.fillRect(5, 4.8, 5, 3);
+    ctx.fillStyle = '#262626';
+    ctx.fillRect(-14, -6.4, 3.2, 12.8); // arka kanat
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-11.5, -3.2);
+    ctx.lineTo(-4, -4.8);
+    ctx.lineTo(2.5, -3.6);
+    ctx.lineTo(11.5, -1.3);
+    ctx.lineTo(13, 0);
+    ctx.lineTo(11.5, 1.3);
+    ctx.lineTo(2.5, 3.6);
+    ctx.lineTo(-4, 4.8);
+    ctx.lineTo(-11.5, 3.2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+    ctx.lineWidth = 0.8;
+    ctx.stroke();
+    ctx.fillStyle = '#262626';
+    ctx.fillRect(11, -6.2, 2.6, 12.4); // ön kanat
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.ellipse(-1, 0, 3.6, 2.2, 0, 0, Math.PI * 2); // kokpit
+    ctx.fill();
+    ctx.fillStyle = isMe ? '#ffe08a' : '#f5f5f5';
+    ctx.beginPath();
+    ctx.arc(-1, 0, 1.5, 0, Math.PI * 2); // kask
+    ctx.fill();
+    ctx.restore();
+    // İsim etiketi (dönmez)
+    if (pl) {
+      const nm = (pl.admin ? '👑 ' : '') + pl.name;
+      ctx.font = 'bold 11px Nunito, Trebuchet MS, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.strokeText(nm, 0, -20);
+      ctx.fillStyle = isMe ? '#ffe08a' : '#fff';
+      ctx.fillText(nm, 0, -20);
+      ctx.save();
+      ctx.translate(-6, -22);
+      drawSocial(pl, time);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function drawRace(time, rr) {
+    drawRacePads();
+    if (!rr) return;
+    drawSkids(time);
+    for (const [id, d] of rr) if (id !== myId) drawCar(d, players.get(id), false, time);
+    const mine = rr.get(myId);
+    if (mine) drawCar(mine, players.get(myId), true, time); // kendi aracın en üstte
+  }
+
+  // Start ışıkları (5 kırmızı) ve "BAŞLA"
+  function drawStartLights() {
+    const ph = lobby.raceRunning && rmeta ? rmeta.ph : null;
+    if (!(ph === 'grid' || ph === 'lights') || !(inRace() || nearTrack())) return;
+    const lit = ph === 'lights' && lightsAt ? Math.min(5, Math.floor((performance.now() - lightsAt) / 1000) + 1) : 0;
+    const w = 5 * 46 + 24, x0 = vw / 2 - w / 2, y0 = 70;
+    ctx.save();
+    ctx.fillStyle = '#1b1b1b';
+    roundRect(ctx, x0, y0, w, 64, 12);
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    for (let i = 0; i < 5; i++) {
+      ctx.fillStyle = i < lit ? '#ff2a2a' : '#3a0d0d';
+      ctx.beginPath();
+      ctx.arc(x0 + 12 + 23 + i * 46, y0 + 32, 17, 0, Math.PI * 2);
+      ctx.fill();
+      if (i < lit) {
+        ctx.fillStyle = 'rgba(255,120,120,0.5)';
+        ctx.beginPath();
+        ctx.arc(x0 + 12 + 18 + i * 46, y0 + 27, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.fillStyle = '#fff';
+    ctx.font = '800 14px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(ph === 'grid' ? 'Araçlar gridde · ışıkları bekle' : 'Işıklar sönünce gaz!', vw / 2, y0 + 84);
+    ctx.restore();
+  }
+
+  let raceHudKey = '';
+  function updateRaceHud() {
+    const hud = $('raceHud');
+    const show = lobby.raceRunning && rsim && (inRace() || nearTrack());
+    if (!show) {
+      if (raceHudKey !== 'off') { hud.classList.add('hidden'); raceHudKey = 'off'; }
+      return;
+    }
+    const st = raceStandings();
+    const myCar = rsim.cars.get(myId);
+    let key = st.map((c) => c.id + ':' + c.lap).join(',');
+    let parts = null;
+    if (myCar) {
+      const pos = st.indexOf(myCar) + 1;
+      const racing = rmeta && (rmeta.ph === 'race' || rmeta.ph === 'finish');
+      const cur = racing && myCar.lap > 0 && !myCar.finished ? rsim.tick - myCar.lapStart : 0;
+      parts = {
+        pos: `P${pos}`, of: `/${st.length}`, lap: `${Math.max(1, Math.min(myCar.lap, RC.LAPS))}/${RC.LAPS}`,
+        time: myCar.finished ? 'BİTTİ' : fmtTime(cur), best: myCar.bestLap ? fmtTime(myCar.bestLap) : '—',
+        speed: String(RC.kmh(myCar)), slip: myCar.slip > 0.15,
+      };
+      key += '|' + Object.values(parts).join('|');
+    }
+    if (key === raceHudKey) return;
+    raceHudKey = key;
+    hud.classList.remove('hidden');
+    $('rMine').classList.toggle('hidden', !parts);
+    if (parts) {
+      $('rPos').textContent = parts.pos;
+      $('rOf').textContent = parts.of;
+      $('rLap').textContent = parts.lap;
+      $('rTime').textContent = parts.time;
+      $('rBest').textContent = parts.best;
+      $('rSpeed').textContent = parts.speed;
+      $('rSlip').classList.toggle('hidden', !parts.slip);
+    }
+    const board = $('rBoard');
+    board.innerHTML = '';
+    st.slice(0, 12).forEach((c, i) => {
+      const pl = players.get(c.id);
+      const row = document.createElement('div');
+      row.className = 'rrow' + (c.id === myId ? ' me' : '');
+      const n = document.createElement('b');
+      n.textContent = i + 1;
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = pl ? pl.color : '#ccc';
+      const nm = document.createElement('span');
+      nm.className = 'nm';
+      nm.textContent = pl ? pl.name : '?';
+      const info = document.createElement('span');
+      info.className = 'inf';
+      info.textContent = c.finished ? '🏁' : `T${Math.max(1, Math.min(c.lap, RC.LAPS))}`;
+      row.append(n, dot, nm, info);
+      board.appendChild(row);
+    });
+  }
+
+  let resultsTimer = null;
+  function showRaceResults(m) {
+    if (!(inRace() || nearTrack() || (m.results || []).some((r) => r.id === myId))) return;
+    const box = $('raceResults');
+    const list = $('rrList');
+    list.innerHTML = '';
+    const reason = m.reason === 'empty' ? 'Pistte araç kalmadı' : m.reason === 'time' ? 'Süre doldu' : 'Yarış bitti';
+    $('rrTitle').textContent = '🏁 ' + reason;
+    m.results.forEach((r, i) => {
+      const row = document.createElement('div');
+      row.className = 'rrrow' + (r.id === myId ? ' me' : '');
+      const medal = ['🥇', '🥈', '🥉'][i] || `${i + 1}.`;
+      const cells = [medal, r.name, r.finished ? fmtTime(r.finished) : `DNF (${r.lap}/${RC.LAPS})`, r.best ? 'En iyi ' + fmtTime(r.best) : ''];
+      for (const t of cells) {
+        const sp = document.createElement('span');
+        sp.textContent = t;
+        row.appendChild(sp);
+      }
+      list.appendChild(row);
+    });
+    box.classList.remove('hidden');
+    clearTimeout(resultsTimer);
+    resultsTimer = setTimeout(() => box.classList.add('hidden'), 10000);
+  }
+
   // ---------- Sosyal ----------
   function showChat(id, text) {
     const p = players.get(id);
@@ -879,6 +1324,7 @@
       setLocked: (v) => { locked = v; updateModeUi(); },
       advance: (dt) => advanceSim(dt),
       get rp() { return lastRp; },
+      get rr() { return lastRr; }, get rsim() { return rsim; }, get rpending() { return rpending; },
       startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
       get stats() { return corrStats; },
       get delay() { return inputDelay(); },
@@ -977,23 +1423,23 @@
   }
 
   const bg = document.createElement('canvas');
-  bg.width = W.W;
-  bg.height = W.H;
+  bg.width = W.CAMP_W;
+  bg.height = W.CAMP_H;
   (function drawBackground() {
     const c = bg.getContext('2d');
     const r = rng(42);
     // Kum
     c.fillStyle = '#ecd9a4';
-    c.fillRect(0, 0, W.W, W.H);
+    c.fillRect(0, 0, W.CAMP_W, W.CAMP_H);
     for (let i = 0; i < 2600; i++) {
       c.fillStyle = r() < 0.5 ? 'rgba(160,120,60,0.18)' : 'rgba(255,255,255,0.35)';
       c.beginPath();
-      c.arc(r() * W.W, r() * W.H, 1 + r() * 2.2, 0, Math.PI * 2);
+      c.arc(r() * W.CAMP_W, r() * W.CAMP_H, 1 + r() * 2.2, 0, Math.PI * 2);
       c.fill();
     }
     // Çakıllar
     for (let i = 0; i < 70; i++) {
-      const x = r() * W.W, y = r() * W.H;
+      const x = r() * W.CAMP_W, y = r() * W.CAMP_H;
       if (W.terrainAt(x, y).kind !== 'sand') continue;
       c.fillStyle = '#c9b78e';
       c.strokeStyle = 'rgba(59,47,36,0.35)';
@@ -1194,13 +1640,16 @@
   })();
 
   // Mini harita (statik kısım)
-  const MM_S = 0.075;
+  const MM_S = 300 / W.W;
   const mm = document.createElement('canvas');
   mm.width = Math.round(W.W * MM_S);
   mm.height = Math.round(W.H * MM_S);
   (function () {
     const c = mm.getContext('2d');
-    c.drawImage(bg, 0, 0, mm.width, mm.height);
+    c.fillStyle = '#ecd9a4';
+    c.fillRect(0, 0, mm.width, mm.height);
+    c.drawImage(bg, 0, 0, W.CAMP_W * MM_S, W.CAMP_H * MM_S);
+    TRACKDRAW.drawMini(c, MM_S);
     c.save();
     c.scale(MM_S, MM_S);
     c.fillStyle = '#5ab4e5';
@@ -1746,8 +2195,9 @@
   addEventListener('resize', resize);
   resize();
 
+  const camLead = { x: 0, y: 0 };
   function updateCamera(dt) {
-    const tx = me.x - vw / 2, ty = me.y - vh / 2;
+    const tx = me.x + camLead.x - vw / 2, ty = me.y + camLead.y - vh / 2;
     const k = cam.init ? 1 - Math.exp(-dt * 5) : 1;
     cam.init = true;
     cam.x += (tx - cam.x) * k;
@@ -1763,9 +2213,15 @@
     const dt = Math.min(0.1, (time - last) / 1000);
     last = time;
     advanceSim(dt);
+    advanceRace(dt);
     const rp = sim ? renderPositions(Math.min(1, simAcc / TICK)) : null;
     lastRp = rp;
+    const rr = rsim ? raceRender(Math.min(1, racc / TICK)) : null;
+    lastRr = rr;
     const myDisc = inMatch() && rp ? rp.get(myId) : null;
+    const myCar = inRace() && rr ? rr.get(myId) : null;
+    camLead.x *= 0.9;
+    camLead.y *= 0.9;
     if (myDisc) {
       // Maçtayken "imleç" kendi diskindir; kamera onu takip eder
       const w = W.toWorld(myDisc.x, myDisc.y);
@@ -1773,37 +2229,50 @@
       me.y = w.y;
       me.vx = me.vy = 0;
       inAx = inAy = 0;
-    } else if (joined && !inMatch()) stepMovement(dt);
+    } else if (myCar) {
+      // Yarışırken "imleç" kendi aracındır; kamera gidiş yönüne biraz ileriden bakar
+      me.x = myCar.x;
+      me.y = myCar.y;
+      me.vx = me.vy = 0;
+      inAx = inAy = 0;
+      camLead.x = myCar.car.vx * 22;
+      camLead.y = myCar.car.vy * 22;
+    } else if (joined && !inMatch() && !inRace()) stepMovement(dt);
     updateCamera(dt);
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#d9c38c';
+    ctx.fillStyle = '#ecd9a4';
     ctx.fillRect(0, 0, vw, vh);
     ctx.save();
     ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
     const sx = Math.max(0, Math.floor(cam.x)), sy = Math.max(0, Math.floor(cam.y));
-    const sw = Math.min(W.W - sx, Math.ceil(vw) + 2), sh = Math.min(W.H - sy, Math.ceil(vh) + 2);
+    const sw = Math.min(W.CAMP_W - sx, Math.ceil(vw) + 2), sh = Math.min(W.CAMP_H - sy, Math.ceil(vh) + 2);
     if (sw > 0 && sh > 0) ctx.drawImage(bg, sx, sy, sw, sh, sx, sy, sw, sh);
+    if (nearTrack()) TRACKDRAW.draw(ctx, cam.x, cam.y, vw, vh);
+    else if (joined) TRACKDRAW.prefetch(TR.PADS.join.x - vw / 2, TR.PADS.join.y - vh / 2);
     drawWater(time);
     drawPads(time);
     drawMatch(time, rp);
+    drawRace(time, rr);
 
     const rt = time - INTERP_DELAY;
     for (const p of players.values()) {
       if (p.id === myId) continue;
       p.render = interp(p.snaps, rt);
-      if (p.render && !(sim && sim.players.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
+      if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
         drawCursor(p, p.render.x, p.render.y, time, false);
       }
     }
-    if (joined && !myDisc) {
+    if (joined && !myDisc && !myCar) {
       const self = players.get(myId) || { name: me.name, color: me.color };
       drawCursor(self, me.x, me.y, time, true);
     }
     ctx.restore();
     if (joined) drawMinimap();
     drawOverlay();
+    drawStartLights();
     updateHud();
+    updateRaceHud();
     requestAnimationFrame(frame);
   }
 

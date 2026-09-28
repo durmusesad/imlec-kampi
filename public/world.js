@@ -3,8 +3,11 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.WORLD = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
-  const W = 3000;
-  const H = 2000;
+  // Dünya: eski kamp alanı (3000x2000) + sağda Istanbul Park yarış pisti bölgesi
+  const W = 8000;
+  const H = 3420;
+  const CAMP_W = 3000;
+  const CAMP_H = 2000;
   const SPAWN = { x: 1500, y: 1150 };
 
   // HaxBall "Classic" stadyumu. Fizik HaxBall birimlerinde (merkez 0,0) hesaplanır,
@@ -136,7 +139,7 @@
   }
 
   return {
-    W, H, SPAWN, FIELD, HAX, PADS, toWorld,
+    W, H, CAMP_W, CAMP_H, SPAWN, FIELD, HAX, PADS, toWorld,
     LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOJI_PALETTE, DEFAULT_QUICK, CHAT_MAX, TREES,
     terrainAt, riverNearest, inEllipse, inRect, isWater,
   };
