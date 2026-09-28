@@ -485,9 +485,11 @@
         const wasIn = inMatch();
         lobby = m;
         document.body.classList.toggle('in-match', inMatch());
-        if (wasIn !== inMatch()) flashKeys(); // maça girince/çıkınca ilgili tuşları kısaca göster
         if (!m.running) resetMatchView();
-        keys.clear();
+        if (wasIn !== inMatch()) {
+          flashKeys(); // maça girince/çıkınca ilgili tuşları kısaca göster
+          keys.clear(); // sadece kendi maç durumum değişince; başkası takım değiştirince tuşlarım bırakılmasın
+        }
         renderPlayerList();
         updateHud();
         break;
@@ -588,7 +590,7 @@
     if (mine) {
       const ack = mine[8];
       // Sunucu tamponuna doğru her güncellemede en fazla 1 adım yaklaş (ani sıçrama olmasın)
-      const want = Math.max(2, Math.min(5, mine[9] || 2));
+      const want = Math.max(2, Math.min(3, mine[9] || 2));
       if (want > inputDelayTicks) inputDelayTicks++;
       else if (want < inputDelayTicks) inputDelayTicks--;
       pending = pending.filter(([s]) => s > ack);
@@ -611,7 +613,7 @@
       const o = offsets.get(id) || { x: 0, y: 0 };
       o.x += b.x - a.x;
       o.y += b.y - a.y;
-      if (corrStats) {
+      if (corrStats && Math.hypot(b.x - a.x, b.y - a.y) < 60) {
         const k = id === 'ball' ? 'ball' : id === myId ? 'me' : 'other';
         const d = Math.hypot(b.x - a.x, b.y - a.y);
         corrStats[k].sum += d;
@@ -767,6 +769,7 @@
       get rp() { return lastRp; },
       startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
       get stats() { return corrStats; },
+      get delay() { return inputDelay(); },
     };
   }
 

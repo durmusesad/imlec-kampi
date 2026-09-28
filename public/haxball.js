@@ -123,15 +123,15 @@
       if (this.phase === 'ended') return events;
 
       if (this.phase === 'countdown' || this.phase === 'halftime') {
-        // Herkes yerinde donar
-        if (!predict && --this.timer <= 0) {
+        // Herkes yerinde donar. Sayaç istemcide de işler ki başlama anı gecikmeden tahmin edilsin
+        if (--this.timer <= 0) {
           if (this.phase === 'halftime') {
             this.phase = 'countdown';
             this.timer = HAX.countdownSeconds * TPS;
-            events.push({ type: 'countdown' });
+            if (!predict) events.push({ type: 'countdown' });
           } else {
             this.startKickoff();
-            events.push({ type: 'kickoff' });
+            if (!predict) events.push({ type: 'kickoff' });
           }
         }
         return events;
@@ -201,13 +201,12 @@
         if (this.phase === 'kickoff') this.kickoffBarrier(p);
       }
 
-      if (predict) return events;
-
-      // 4) Kurallar: başlama süresi, zaman, gol, devre
+      // 4) Kurallar: başlama süresi (istemcide de tahmin edilir), zaman, gol, devre
       if (this.phase === 'kickoff' && --this.timer <= 0) {
         this.phase = 'play'; // 5 sn içinde başlama yapılmazsa orta yuvarlak herkese açılır
-        events.push({ type: 'kickoffReleased' });
+        if (!predict) events.push({ type: 'kickoffReleased' });
       }
+      if (predict) return events;
       if (this.phase === 'play' || this.phase === 'kickoff') {
         if (this.phase === 'play') this.ticks++;
         const goalAt = ball.x < -AX ? -1 : ball.x > AX ? 1 : 0;

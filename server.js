@@ -363,6 +363,11 @@ function broadcastMatch() {
   if (match) broadcast({ t: 'g', ...match.snapshot(ackOf) });
 }
 
+// Uyarlamalı girdi tamponu sınırları (adım) ve ölçüm penceresi (ms)
+const BUF_MIN = +(process.env.BUF_MIN || 2);
+const BUF_MAX = +(process.env.BUF_MAX || 3);
+const BUF_WINDOW = 1500;
+
 let endAt = 0;
 function step() {
   // Her oyuncu için sıradaki girdiyi uygula; kuyruk boşsa son girdi kısa süre devam eder
@@ -379,22 +384,27 @@ function step() {
     // Uyarlamalı tampon: ağ dalgalanıp kuyruk boşalırsa bu oyuncu için daha çok girdi biriktirilir
     // (tahmin bozulmasın), ağ sakinleşince tampon küçültülür (gecikme azalsın)
     if (p.buf == null) {
-      p.buf = 2;
+      p.buf = BUF_MIN;
       p.minQ = Infinity;
       p.winAt = now;
-      p.starvedAt = 0;
+      p.starves = [];
     }
     const next = p.queue.shift();
     if (next) {
       p.ack = next[0];
       match.setInput(d.id, next[1]);
     } else {
-      p.buf = Math.min(6, p.buf + 1);
-      p.starvedAt = now;
+      // Tek bir gecikme sıçraması tamponu büyütmesin (giriş gecikmesi artmasın); sık tekrarlarsa büyüt
+      p.starves = p.starves.filter((t) => now - t < BUF_WINDOW);
+      p.starves.push(now);
+      if (p.starves.length >= 3) {
+        p.buf = Math.min(BUF_MAX, p.buf + 1);
+        p.starves = [];
+      }
     }
     p.minQ = Math.min(p.minQ, p.queue.length);
-    if (now - p.winAt > 2000) {
-      if (p.minQ >= 1 && now - p.starvedAt > 2000 && p.buf > 1) p.buf--;
+    if (now - p.winAt > BUF_WINDOW) {
+      if (p.minQ >= 1 && !p.starves.length && p.buf > BUF_MIN) p.buf--;
       p.minQ = Infinity;
       p.winAt = now;
     }
