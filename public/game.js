@@ -575,7 +575,8 @@
       updateHud();
       return;
     }
-    const before = renderPositions(1);
+    // Önceki sapmayı hariç tutarak ölç; yoksa sapma her güncellemede kendini tekrar ekleyip büyür
+    const before = renderPositions(1, true);
     sim.load(g);
     const mine = g.p.find((q) => q[0] === myId);
     if (mine) {
@@ -738,6 +739,7 @@
       get sim() { return sim; }, get pending() { return pending; }, keys,
       setLocked: (v) => { locked = v; updateModeUi(); },
       advance: (dt) => advanceSim(dt),
+      get rp() { return lastRp; },
     };
   }
 
@@ -1633,12 +1635,14 @@
     cam.y = clampAxis(cam.y, vh, W.H);
   }
 
+  let lastRp = null;
   let last = performance.now();
   function frame(time) {
     const dt = Math.min(0.1, (time - last) / 1000);
     last = time;
     advanceSim(dt);
     const rp = sim ? renderPositions(Math.min(1, simAcc / TICK)) : null;
+    lastRp = rp;
     const myDisc = inMatch() && rp ? rp.get(myId) : null;
     if (myDisc) {
       // Maçtayken "imleç" kendi diskindir; kamera onu takip eder
