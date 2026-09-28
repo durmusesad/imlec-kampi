@@ -1,0 +1,16 @@
+{
+  "name": "imlec-kampi",
+  "version": "1.0.0",
+  "description": "Sınıf arkadaşlarıyla çok oyunculu imleç oyunu",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.22.0"
+  }
+}

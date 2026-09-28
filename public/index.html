@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>İmleç Kampı</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏕️</text></svg>">
+<style>
+  :root {
+    --ink: #3b2f24;
+    --paper: #fff8ec;
+    --accent: #ff7a3d;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #e9d6a8; font-family: "Nunito", "Trebuchet MS", system-ui, sans-serif; color: var(--ink); }
+  canvas { display: block; position: fixed; inset: 0; }
+  .hidden { display: none !important; }
+
+  #join, #resume {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(40, 30, 20, 0.35); backdrop-filter: blur(2px);
+  }
+  .card {
+    background: var(--paper); border: 3px solid var(--ink); border-radius: 18px;
+    padding: 28px 32px; width: 360px; box-shadow: 6px 6px 0 var(--ink); text-align: center;
+  }
+  .card h1 { margin: 0 0 4px; font-size: 32px; }
+  .card p { margin: 0 0 18px; opacity: .75; }
+  .card input {
+    width: 100%; font: inherit; font-size: 18px; padding: 10px 12px; border: 2px solid var(--ink);
+    border-radius: 10px; background: #fff; outline: none;
+  }
+  .colors { display: flex; gap: 8px; justify-content: center; margin: 16px 0 20px; }
+  .colors button {
+    width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--ink); cursor: pointer; padding: 0;
+  }
+  .colors button.sel { outline: 3px solid var(--ink); outline-offset: 2px; }
+  .card .go {
+    font: inherit; font-size: 20px; font-weight: 800; padding: 10px 28px; border: 3px solid var(--ink);
+    border-radius: 12px; background: var(--accent); color: #fff; cursor: pointer; box-shadow: 3px 3px 0 var(--ink);
+  }
+  .card .go:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
+  .help { font-size: 13px; margin-top: 16px; opacity: .7; line-height: 1.5; }
+  #resume .card { cursor: pointer; }
+
+  #players {
+    position: fixed; top: 12px; right: 12px; min-width: 170px; background: var(--paper);
+    border: 2px solid var(--ink); border-radius: 12px; padding: 8px 12px; font-size: 14px;
+    box-shadow: 3px 3px 0 var(--ink);
+  }
+  #players h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; opacity: .7; }
+  #players .row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  #players .dot { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--ink); flex: none; }
+  #players .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
+  #players .goals { font-weight: 800; }
+  #players .me .name { font-weight: 800; }
+
+  #status {
+    position: fixed; top: 12px; left: 12px; background: var(--paper); border: 2px solid var(--ink);
+    border-radius: 10px; padding: 6px 10px; font-size: 13px;
+  }
+
+  #chatbox {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); width: min(480px, 90vw);
+  }
+  #chatbox input {
+    width: 100%; font: inherit; font-size: 16px; padding: 10px 14px; border: 2px solid var(--ink);
+    border-radius: 12px; background: var(--paper); outline: none; box-shadow: 3px 3px 0 var(--ink);
+  }
+  #hint {
+    position: fixed; bottom: 14px; left: 14px; font-size: 12px; opacity: .65; background: rgba(255,248,236,.7);
+    padding: 4px 8px; border-radius: 8px;
+  }
+
+  #goal {
+    position: fixed; top: 22%; left: 50%; transform: translate(-50%, -50%); font-size: 64px; font-weight: 900;
+    color: #fff; -webkit-text-stroke: 3px var(--ink); text-shadow: 5px 5px 0 var(--ink); pointer-events: none;
+    white-space: nowrap; opacity: 0; transition: opacity .25s, transform .25s;
+  }
+  #goal.show { opacity: 1; transform: translate(-50%, -50%) scale(1.08); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="players" class="hidden"><h3>Oyuncular</h3><div id="plist"></div></div>
+<div id="status" class="hidden"></div>
+<div id="hint" class="hidden">Tıkla: ping · 1–5: emoji · Enter: sohbet · Esc: imleci bırak</div>
+<div id="chatbox" class="hidden"><input id="chat" maxlength="80" placeholder="Bir şey yaz, Enter ile gönder…" autocomplete="off"></div>
+<div id="goal"></div>
+
+<div id="join">
+  <div class="card">
+    <h1>🏕️ İmleç Kampı</h1>
+    <p>Arkadaşlarınla imleçlerinizi gezdirin, top oynayın.</p>
+    <input id="name" maxlength="16" placeholder="Adın" autocomplete="off">
+    <div class="colors" id="colors"></div>
+    <button class="go" id="joinBtn">Katıl</button>
+    <div class="help">Nehir seni sürükler, çamur yavaşlatır, buzda kayarsın.<br>Topu imlecinle karşı kaleye it!</div>
+  </div>
+</div>
+
+<div id="resume" class="hidden">
+  <div class="card"><h1>⏸️</h1><p style="margin:0">Devam etmek için tıkla</p></div>
+</div>
+
+<script src="world.js"></script>
+<script src="game.js"></script>
+</body>
+</html>
