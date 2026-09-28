@@ -229,7 +229,7 @@ wss.on('connection', (ws) => {
         t: 'welcome',
         id: me.id,
         restored: !!restored,
-        players: [...players.values()].map(publicPlayer),
+        players: [...players.values()].filter((p) => p.ws).map(publicPlayer),
         scores,
         chat: chatLog,
       });
@@ -275,6 +275,13 @@ wss.on('connection', (ws) => {
         if (me.team) setTeam(me, null);
         break;
       }
+      case 'bye': {
+        // Kullanıcı sayfadan ayrılıyor
+        removePlayer(me);
+        me = null;
+        ws.close(1000);
+        break;
+      }
       case 'chat': {
         const text = cleanText(m.text, WORLD.CHAT_MAX);
         if (!text) return;
@@ -302,13 +309,19 @@ wss.on('connection', (ws) => {
     }
   });
 
-  ws.on('close', () => {
-    if (!me || me.ws !== ws) return;
-    // Hemen silme: kısa kopmalarda (Cloud Run 60 dk sınırı, wifi) oyuncu yerine dönebilsin
+  ws.on('close', (code) => {
+    if (!me || me.ws !== ws || !players.has(me.id)) return;
+    // Sayfa kapatıldı/yenilendi (1000/1001): oyuncuyu hemen sil, eski imleç kalmasın
+    if (code === 1000 || code === 1001) {
+      removePlayer(me);
+      return;
+    }
+    // Beklenmedik kopma (wifi, Cloud Run 60 dk sınırı): kısa süre yerini koru ama imlecini gizle
     me.ws = null;
     me.queue = [];
     me.ghostUntil = Date.now() + RECONNECT_GRACE;
     if (match) match.setInput(me.id, 0);
+    broadcast({ t: 'away', id: me.id });
   });
 });
 
@@ -395,7 +408,7 @@ setInterval(() => {
 setInterval(() => {
   if (players.size === 0) return;
   const p = [];
-  for (const pl of players.values()) p.push([pl.id, Math.round(pl.x), Math.round(pl.y)]);
+  for (const pl of players.values()) if (pl.ws) p.push([pl.id, Math.round(pl.x), Math.round(pl.y)]);
   broadcast({ t: 'state', p });
 }, 1000 / 30);
 

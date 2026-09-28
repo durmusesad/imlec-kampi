@@ -51,10 +51,10 @@
 
   // Yeniden bağlanınca aynı oyuncu olarak dönebilmek için sekmeye özel anahtar
   let token = null;
-  try { token = sessionStorage.getItem('imlec-kampi:token'); } catch {}
+  token = store.get('imlec-kampi:token', null);
   if (!token) {
     token = Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(36).padStart(2, '0')).join('').slice(0, 20);
-    try { sessionStorage.setItem('imlec-kampi:token', token); } catch {}
+    store.set('imlec-kampi:token', token);
   }
 
   // ---------- Giriş ekranı ----------
@@ -260,7 +260,8 @@
     }
   });
 
-  function addChatLine(m) {
+  // Sohbet geçmişi sadece sohbet açıkken görünür; yeni mesajlar birkaç saniye görünüp kaybolur
+  function addChatLine(m, history) {
     const log = $('chatlog');
     const row = document.createElement('div');
     row.className = 'line';
@@ -273,7 +274,8 @@
     log.appendChild(row);
     while (log.children.length > 30) log.firstChild.remove();
     log.scrollTop = log.scrollHeight;
-    setTimeout(() => row.classList.add('old'), 12000);
+    if (history) row.classList.add('old');
+    else setTimeout(() => row.classList.add('old'), 5000);
   }
 
   // ---------- Hızlı emoji ayarları ----------
@@ -362,6 +364,16 @@
     };
   }
 
+  // Sayfadan çıkarken sunucuya haber ver: eski imleç haritada kalmasın
+  addEventListener('pagehide', () => {
+    try {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ t: 'bye' }));
+        ws.close(1000);
+      }
+    } catch {}
+  });
+
   function send(m) {
     if (connected && ws && ws.readyState === 1) ws.send(JSON.stringify(m));
   }
@@ -397,7 +409,7 @@
         resetMatchView();
         if (!m.restored) {
           $('chatlog').querySelectorAll('.line').forEach((n) => n.remove());
-          for (const c of m.chat || []) addChatLine(c);
+          for (const c of m.chat || []) addChatLine(c, true);
         }
         renderPlayerList();
         break;
@@ -405,6 +417,7 @@
         addPlayer(m.p);
         renderPlayerList();
         break;
+      case 'away': // bağlantısı koptu; geri dönerse 'join' ile tekrar gelir
       case 'leave':
         players.delete(m.id);
         delete scores[m.id];
