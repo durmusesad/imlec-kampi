@@ -94,7 +94,7 @@
     store.set('imlec-kampi:oyuncu', { name, color: me.color });
     joined = true;
     $('join').classList.add('hidden');
-    ['players', 'keys', 'chatlog'].forEach((id) => $(id).classList.remove('hidden'));
+    ['players', 'keys', 'chatlog', 'ping'].forEach((id) => $(id).classList.remove('hidden'));
     flashKeys();
     connect();
     requestLock();
@@ -516,9 +516,19 @@
         break;
       }
       case 'g':
+        lastSnapAt = now;
         onSnapshot(m);
         break;
+      case 'pong': {
+        // Gidiş-dönüş süresi; ani sıçramalar göstergeyi titretmesin diye yumuşatılır
+        const rtt = now - m.c;
+        if (rtt >= 0 && rtt < 10000) rttMs = rttMs == null ? rtt : rttMs * 0.6 + rtt * 0.4;
+        lastPongAt = now;
+        updatePing();
+        break;
+      }
       case 'rg':
+        lastSnapAt = now;
         onRaceSnapshot(m);
         break;
       case 'rlights':
@@ -1139,6 +1149,28 @@
     box.classList.remove('hidden');
     clearTimeout(resultsTimer);
     resultsTimer = setTimeout(() => box.classList.add('hidden'), 10000);
+  }
+
+  // ---------- Ping göstergesi ----------
+  let rttMs = null, lastPongAt = 0, lastSnapAt = 0, pingKey = '';
+  setInterval(() => {
+    if (connected) send({ t: 'png', c: performance.now() });
+  }, 2000);
+  function updatePing() {
+    if (!joined) return;
+    const now = performance.now();
+    // Maçta/yarışta 0.4 sn'den uzun durum gelmezse ya da ping cevabı 5 sn gecikirse bağlantı zayıf
+    const playing = (inMatch() && sim) || (inRace() && rsim);
+    const weak = !connected || (playing && now - lastSnapAt > 400) || (lastPongAt && now - lastPongAt > 5000);
+    const ms = rttMs == null ? null : Math.round(rttMs);
+    const cls = weak ? 'bad weak' : ms == null ? '' : ms < 80 ? 'good' : ms < 150 ? 'ok' : 'bad';
+    const key = cls + '|' + ms + '|' + weak;
+    if (key === pingKey) return;
+    pingKey = key;
+    const el = $('ping');
+    el.className = cls;
+    $('pingMs').textContent = weak ? '⚠ zayıf' : ms == null ? '—' : String(ms);
+    el.title = weak ? 'Bağlantı zayıf: sunucudan bilgi gecikiyor' : 'Sunucuya gidiş-dönüş süresi';
   }
 
   // ---------- Sosyal ----------
@@ -2292,6 +2324,7 @@
     drawStartLights();
     updateHud();
     updateRaceHud();
+    updatePing();
     requestAnimationFrame(frame);
   }
 

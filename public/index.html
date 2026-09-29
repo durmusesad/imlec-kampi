@@ -43,8 +43,25 @@
   .card .go:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
   .help { font-size: 13px; margin-top: 16px; opacity: .7; line-height: 1.5; }
 
+  /* Ping göstergesi (sağ üst) */
+  #ping {
+    position: fixed; top: 12px; right: 12px; display: flex; align-items: center; gap: 6px; background: #16181d; color: #fff;
+    border: 2px solid var(--ink); border-radius: 999px; padding: 4px 11px 4px 9px; box-shadow: 2px 2px 0 var(--ink);
+    font: 700 13px Arial, sans-serif; font-variant-numeric: tabular-nums;
+  }
+  #ping small { opacity: .6; font-weight: 600; margin-left: -3px; }
+  #ping .bars { display: flex; align-items: flex-end; gap: 2px; height: 12px; }
+  #ping .bars i { display: block; width: 3px; background: #555; border-radius: 1px; }
+  #ping .bars i:nth-child(1) { height: 4px; } #ping .bars i:nth-child(2) { height: 6px; }
+  #ping .bars i:nth-child(3) { height: 9px; } #ping .bars i:nth-child(4) { height: 12px; }
+  #ping.good .bars i { background: #43d17a; }
+  #ping.ok .bars i:nth-child(-n+3) { background: #f5c542; }
+  #ping.bad .bars i:nth-child(-n+2) { background: #ff5252; }
+  #ping.good b { color: #7ef0a8; } #ping.ok b { color: #ffe08a; } #ping.bad b { color: #ff8a80; }
+  #ping.weak { background: #7a1c1c; }
+
   #players {
-    position: fixed; top: 12px; right: 12px; min-width: 170px; background: var(--paper);
+    position: fixed; top: 48px; right: 12px; min-width: 170px; background: var(--paper);
     border: 2px solid var(--ink); border-radius: 12px; padding: 8px 12px; font-size: 14px;
     box-shadow: 3px 3px 0 var(--ink);
   }
@@ -241,6 +258,7 @@
 <body>
 <canvas id="c"></canvas>
 
+<div id="ping" class="hidden" title="Sunucuya gidiş-dönüş süresi"><span class="bars"><i></i><i></i><i></i><i></i></span><b id="pingMs">—</b><small>ms</small></div>
 <div id="players" class="hidden"><h3>Oyuncular</h3><div id="plist"></div></div>
 <div id="status" class="hidden"></div>
 <div id="keys" class="hidden">

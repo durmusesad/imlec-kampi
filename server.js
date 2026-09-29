@@ -382,7 +382,28 @@ function stopRace() {
 }
 
 function broadcastRace() {
-  if (race) broadcast({ t: 'rg', ...race.snapshot((id) => { const p = players.get(id); const c = p && chan(p, 'r'); return c ? [c.ack, c.buf] : [0, 2]; }) });
+  if (!race) return;
+  const R = TRACK.REGION, M = 1200;
+  const g = { t: 'rg', ...race.snapshot((id) => { const p = players.get(id); const c = p && chan(p, 'r'); return c ? [c.ack, c.buf] : [0, 2]; }) };
+  // Yarışanlara ve pistin yakınındakilere saniyede 60, uzaktakilere (mini harita için) saniyede 4
+  broadcastFresh(g, (p) => race.cars.has(p.id) || (p.x > R.x - M && p.x < R.x + R.w + M && p.y > R.y - M && p.y < R.y + R.h + M));
+}
+
+// Hızlı güncellenen durum mesajları için gönderim:
+// - Bağlantısı yetişemeyen oyuncunun gönderim kuyruğu doluysa bu durum atlanır; kuyruk birikip oyun
+//   gittikçe eski bilgiyle oynanmasın (donup zıplama olmasın), bir sonraki güncel durum gider.
+// - Uzaktaki oyunculara seyrek gönderilir (bant genişliği boşa gitmesin).
+const FRESH_MAX_BUFFER = 24 * 1024;
+function broadcastFresh(msg, isNear, farEvery = 15) {
+  const data = JSON.stringify(msg);
+  const far = (msg.n || 0) % farEvery === 0; // uzaktakilere bu adımda gönderilsin mi
+  for (const p of players.values()) {
+    const ws = p.ws;
+    if (!ws || ws.readyState !== 1) continue;
+    if (isNear && !isNear(p) && !far) continue;
+    if (ws.bufferedAmount > FRESH_MAX_BUFFER) continue;
+    ws.send(data);
+  }
 }
 
 function removePlayer(p) {
@@ -396,7 +417,13 @@ function removePlayer(p) {
 }
 
 // ---------- WebSocket ----------
-const wss = new WebSocketServer({ server, maxPayload: 4096 });
+// Sıkıştırma (permessage-deflate): JSON durum mesajları yavaş bağlantıda çok daha az yer kaplar.
+// Hızlı sıkıştırma seviyesi seçildi; 12 oyuncu için sunucu yükü önemsiz.
+const wss = new WebSocketServer({
+  server,
+  maxPayload: 4096,
+  perMessageDeflate: { threshold: 128, zlibDeflateOptions: { level: 1, memLevel: 7 } },
+});
 
 wss.on('connection', (ws) => {
   let me = null;
@@ -518,6 +545,11 @@ wss.on('connection', (ws) => {
       case 'leave': {
         if (me.racer) setRacer(me, false);
         else if (me.team) setTeam(me, null);
+        break;
+      }
+      case 'png': {
+        // Ping ölçümü: istemcinin gönderdiği zamanı aynen geri yolla
+        if (num(m.c) && allow(me, 'png', 4, 2000)) send(ws, { t: 'pong', c: m.c });
         break;
       }
       case 'status': {
@@ -693,7 +725,11 @@ function ackOf(id) {
 }
 
 function broadcastMatch() {
-  if (match) broadcast({ t: 'g', ...match.snapshot(ackOf) });
+  if (!match) return;
+  const F = WORLD.FIELD, M = 1200;
+  // Maçtakilere ve sahanın yakınındakilere saniyede 60, uzaktakilere (mini harita için) saniyede 4
+  broadcastFresh({ t: 'g', ...match.snapshot(ackOf) },
+    (p) => match.players.has(p.id) || (p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M));
 }
 
 let endAt = 0;
@@ -773,7 +809,7 @@ setInterval(() => {
   if (players.size === 0) return;
   const p = [];
   for (const pl of players.values()) if (pl.ws) p.push([pl.id, Math.round(pl.x), Math.round(pl.y)]);
-  broadcast({ t: 'state', p });
+  broadcastFresh({ t: 'state', p });
 }, 1000 / 30);
 
 server.listen(PORT, () => console.log(`İmleç Kampı ${PORT} portunda çalışıyor`));
