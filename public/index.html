@@ -56,9 +56,14 @@
   .card .go:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--ink); }
   .help { font-size: 13px; margin-top: 16px; opacity: .7; line-height: 1.5; }
 
-  /* Ping göstergesi (sağ üst) */
+  /* Ses düğmesi ve ping göstergesi (sağ üst) */
+  #soundBtn {
+    position: fixed; top: 12px; right: 12px; height: 26px; width: 36px; padding: 0; font-size: 14px; line-height: 1;
+    background: #16181d; border: 2px solid var(--ink); border-radius: 999px; box-shadow: 2px 2px 0 var(--ink); cursor: pointer;
+  }
+  #soundBtn.off { background: #7a1c1c; }
   #ping {
-    position: fixed; top: 12px; right: 12px; display: flex; align-items: center; gap: 6px; background: #16181d; color: #fff;
+    position: fixed; top: 12px; right: 56px; display: flex; align-items: center; gap: 6px; background: #16181d; color: #fff;
     border: 2px solid var(--ink); border-radius: 999px; padding: 4px 11px 4px 9px; box-shadow: 2px 2px 0 var(--ink);
     font: 700 13px Arial, sans-serif; font-variant-numeric: tabular-nums;
   }
@@ -271,6 +276,7 @@
 <body>
 <canvas id="c"></canvas>
 
+<button id="soundBtn" class="hidden" title="Ses">🔊</button>
 <div id="ping" class="hidden" title="Sunucuya gidiş-dönüş süresi"><span class="bars"><i></i><i></i><i></i><i></i></span><b id="pingMs">—</b><small>ms</small></div>
 <div id="players" class="hidden"><h3>Oyuncular</h3><div id="plist"></div></div>
 <div id="status" class="hidden"></div>
@@ -285,6 +291,7 @@
     <span class="k"><kbd>E</kbd></span><span class="lbl">Emojileri düzenle</span>
     <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
     <span class="k"><kbd>Q</kbd></span><span class="lbl">Oyunu durdur (normal imleç)</span>
+    <span class="k"><kbd>M</kbd></span><span class="lbl">Sesi aç / kapat</span>
   </div></section>
   <section class="sec-race"><h5>Yarış</h5><div class="grid">
     <span class="k"><kbd>W</kbd><span class="or">/</span><kbd>↑</kbd></span><span class="lbl">Gaz</span>
@@ -293,6 +300,7 @@
     <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
     <span class="k"><kbd>L</kbd></span><span class="lbl">Yarıştan çık</span>
     <span class="k"><kbd>Q</kbd></span><span class="lbl">Oyunu durdur (normal imleç)</span>
+    <span class="k"><kbd>M</kbd></span><span class="lbl">Sesi aç / kapat</span>
   </div></section>
   <section class="sec-match"><h5>Maç</h5><div class="grid">
     <span class="k"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="lbl">Hareket (oklar da olur)</span>
@@ -301,6 +309,7 @@
     <span class="k"><kbd>1</kbd><span class="or">–</span><kbd>8</kbd></span><span class="lbl">Hızlı emoji</span>
     <span class="k"><kbd>L</kbd></span><span class="lbl">Maçtan çık</span>
     <span class="k"><kbd>Q</kbd></span><span class="lbl">Oyunu durdur (normal imleç)</span>
+    <span class="k"><kbd>M</kbd></span><span class="lbl">Sesi aç / kapat</span>
   </div></section>
   </div>
   <p class="resume">Devam etmek için sahaya <b>çift tıkla</b></p>
@@ -369,6 +378,7 @@
   </div>
 </div>
 
+<script src="audio.js"></script>
 <script src="world.js"></script>
 <script src="skins.js"></script>
 <script src="haxball.js"></script>

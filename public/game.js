@@ -122,10 +122,11 @@
     const name = nameInput.value.trim().slice(0, 16);
     if (!name) { nameInput.focus(); return; }
     me.name = name;
+    SFX.init(); // tarayıcı sesi ancak bir tıklama/tuşla başlatmaya izin verir
     store.set('imlec-kampi:oyuncu', { name, skin: me.skin });
     joined = true;
     $('join').classList.add('hidden');
-    ['players', 'keys', 'chatlog', 'ping'].forEach((id) => $(id).classList.remove('hidden'));
+    ['players', 'keys', 'chatlog', 'ping', 'soundBtn'].forEach((id) => $(id).classList.remove('hidden'));
     flashKeys();
     connect();
     requestLock();
@@ -183,6 +184,7 @@
   document.addEventListener('pointerlockerror', updateModeUi);
   canvas.addEventListener('dblclick', () => {
     if (joined && !locked) requestLock();
+    SFX.init();
   });
   document.addEventListener('contextmenu', (e) => {
     if (joined && locked) e.preventDefault();
@@ -224,12 +226,14 @@
     // Sol tık sadece etkileşimli alanlarda bir şey yapar (boş yere tıklamak hiçbir şey göndermez)
     for (const [name, pad] of Object.entries(W.PADS)) {
       if (W.inRect(me.x, me.y, pad)) {
+        SFX.click();
         send({ t: 'pad', pad: name });
         return;
       }
     }
     for (const [name, pad] of Object.entries(TR.PADS)) {
       if (W.inRect(me.x, me.y, pad)) {
+        SFX.click();
         send({ t: 'rpad', pad: name });
         return;
       }
@@ -245,6 +249,7 @@
   function sendEmote(em) {
     send({ t: 'emote', e: em });
     showEmote(myId, em);
+    SFX.pop(1, 0);
   }
 
   // ---------- Klavye ----------
@@ -310,6 +315,9 @@
         return;
       case 'KeyH':
         flashKeys();
+        return;
+      case 'KeyM':
+        toggleSound();
         return;
     }
     const n = /^Digit([1-8])$/.exec(e.code);
@@ -568,14 +576,15 @@
         break;
       case 'rgo':
         goAt = performance.now();
+        if (inRace() || nearTrack()) SFX.go();
         if (inRace() || nearTrack()) announce('BAŞLA!', '#fff', 'Istanbul Park · ' + RC.LAPS + ' tur');
         break;
       case 'rlap':
-        if (m.id === myId) toast(`Tur ${m.lap} bitti · ${fmtTime(m.time)}`);
+        if (m.id === myId) { toast(`Tur ${m.lap} bitti · ${fmtTime(m.time)}`); SFX.lap(); }
         break;
       case 'rfinish': {
         const p = players.get(m.id);
-        if (m.id === myId) announce(`${m.pos}. oldun!`, '#fff', fmtTime(m.time));
+        if (m.id === myId) { announce(`${m.pos}. oldun!`, '#fff', fmtTime(m.time)); SFX.finish(); }
         else if (p && (inRace() || nearTrack())) toast(`🏁 ${p.name} ${m.pos}. olarak bitirdi`);
         break;
       }
@@ -592,10 +601,12 @@
         break;
       case 'halftime':
         announce('DEVRE ARASI', '#fff', 'Taraflar değişiyor');
+        if (inMatch() || nearField()) SFX.whistle('half');
         break;
       case 'end': {
         const t = m.winner ? H.teams[m.winner] : null;
         const sub = m.reason === 'empty' ? 'Tüm oyuncular sahadan ayrıldı' : `${m.score.red} - ${m.score.blue}`;
+        if (m.reason !== 'empty' && (inMatch() || nearField())) SFX.whistle('end');
         if (m.reason === 'empty') announce('Maç bitti', '#fff', sub);
         else announce(t ? `${t.name} kazandı!` : 'Berabere!', t ? t.color : '#fff', sub);
         break;
@@ -603,10 +614,15 @@
       case 'chat':
         showChat(m.id, m.text);
         addChatLine(m);
+        SFX.chat();
         break;
-      case 'emote':
+      case 'emote': {
         showEmote(m.id, m.e);
+        const p = players.get(m.id);
+        const sp = p && p.render ? spatial(p.render.x, p.render.y) : null;
+        if (sp) SFX.pop(sp.vol, sp.pan);
         break;
+      }
       case 'status': {
         const p = players.get(m.id);
         if (p) { p.afk = m.afk; p.typing = m.typing; }
@@ -619,6 +635,7 @@
         const team = H.teams[m.team];
         const who = p ? (m.own ? `${p.name} (kendi kalesine)` : p.name) : team.name;
         announce(`GOL! ${who}`, team.color, `${m.score.red} - ${m.score.blue}`);
+        if (inMatch() || nearField()) SFX.goal();
         break;
       }
       case 'full':
@@ -762,8 +779,8 @@
         pending.push([seq, k]);
         send({ t: 'i', s: seq, k });
         const d = inputDelay();
-        simStep(pending.length > d ? pending[pending.length - 1 - d][1] : null);
-      } else simStep(null);
+        ballSoundStep(() => simStep(pending.length > d ? pending[pending.length - 1 - d][1] : null));
+      } else ballSoundStep(() => simStep(null));
     }
     if (steps === 6) simAcc = 0; // sekme arka plandaydı: yetişmeye çalışma
     const decay = Math.exp(-dt * 14);
@@ -882,8 +899,8 @@
         rseq++;
         rpending.push([rseq, k]);
         send({ t: 'ri', s: rseq, k });
-        rStep(rpending.length > rDelay ? rpending[rpending.length - 1 - rDelay][1] : null);
-      } else rStep(null);
+        crashSoundStep(() => rStep(rpending.length > rDelay ? rpending[rpending.length - 1 - rDelay][1] : null));
+      } else crashSoundStep(() => rStep(null));
     }
     if (steps === 6) racc = 0;
     const decay = Math.exp(-dt * 12);
@@ -1068,10 +1085,13 @@
   }
 
   // Start ışıkları (5 kırmızı) ve "BAŞLA"
+  let lastLit = 0;
   function drawStartLights() {
     const ph = lobby.raceRunning && rmeta ? rmeta.ph : null;
-    if (!(ph === 'grid' || ph === 'lights') || !(inRace() || nearTrack())) return;
+    if (!(ph === 'grid' || ph === 'lights') || !(inRace() || nearTrack())) { lastLit = 0; return; }
     const lit = ph === 'lights' && lightsAt ? Math.min(5, Math.floor((performance.now() - lightsAt) / 1000) + 1) : 0;
+    if (lit > lastLit) SFX.beep();
+    lastLit = lit;
     const w = 5 * 46 + 24, x0 = vw / 2 - w / 2, y0 = 70;
     ctx.save();
     ctx.fillStyle = '#1b1b1b';
@@ -1395,6 +1415,163 @@
       get stats() { return corrStats; },
       get delay() { return inputDelay(); },
     };
+  }
+
+  // ---------- Ses ----------
+  // Kameraya göre ses: uzaklık -> şiddet, yatay konum -> sağ/sol. Görüş alanı dışındaysa null
+  function spatial(x, y, range = 1) {
+    const cx = cam.x + wvw / 2, cy = cam.y + wvh / 2;
+    const d = Math.hypot(x - cx, y - cy) / (Math.max(wvw, wvh) * 0.6 * range);
+    if (d >= 1) return null;
+    return { vol: (1 - d) * (1 - d), pan: Math.max(-1, Math.min(1, (x - cx) / (wvw / 2))) * 0.7 };
+  }
+  function nearField() {
+    const F = W.FIELD;
+    return cam.x + wvw > F.x && cam.x < F.x + F.w && cam.y + wvh > F.y && cam.y < F.y + F.h;
+  }
+  function updateSoundBtn() {
+    const b = $('soundBtn');
+    b.textContent = SFX.muted ? '🔇' : '🔊';
+    b.title = SFX.muted ? 'Ses kapalı (M ile aç)' : 'Ses açık (M ile kapat)';
+    b.classList.toggle('off', SFX.muted);
+  }
+  function toggleSound() {
+    SFX.init();
+    SFX.setMuted(!SFX.muted);
+    SFX.toggle(!SFX.muted);
+    updateSoundBtn();
+    toast(SFX.muted ? '🔇 Ses kapatıldı (M ile aç)' : '🔊 Ses açıldı');
+  }
+  $('soundBtn').onclick = (e) => { e.stopPropagation(); toggleSound(); };
+  updateSoundBtn();
+
+  // Top sesleri: sadece ileri tahmin adımlarında (düzeltme sırasındaki tekrar oynatmalar ses çıkarmaz)
+  let lastBallSnd = 0, lastKickSnd = 0;
+  const BALL_R = H.ball.radius, POST_HIT = H.ball.radius + H.postRadius + 2;
+  function ballSoundStep(step) {
+    const b = sim.ball, vx0 = b.vx, vy0 = b.vy;
+    const ready = new Map();
+    for (const p of sim.players.values()) ready.set(p.id, p.kickReady);
+    step();
+    const dv = Math.hypot(b.vx - vx0, b.vy - vy0);
+    if (dv < 0.35) return;
+    const t = performance.now();
+    let kicked = false;
+    for (const p of sim.players.values()) if (ready.get(p.id) && !p.kickReady) kicked = true;
+    if (kicked ? t - lastKickSnd < 150 : t - lastBallSnd < 70) return;
+    const w = W.toWorld(b.x, b.y);
+    const sp = spatial(w.x, w.y);
+    if (!sp) return;
+    lastBallSnd = t;
+    if (kicked) {
+      lastKickSnd = t;
+      SFX.kick(sp.vol * Math.min(1, 0.55 + dv / 10), sp.pan);
+      return;
+    }
+    const k = sp.vol * Math.min(1, dv / 3.5);
+    for (const sx of [-H.ballAreaX, H.ballAreaX]) for (const sy of [-H.goalY, H.goalY]) {
+      if (Math.hypot(b.x - sx, b.y - sy) < POST_HIT) { SFX.post(k, sp.pan); return; }
+    }
+    if (Math.abs(b.x) > H.ballAreaX) { SFX.net(k, sp.pan); return; }
+    for (const p of sim.players.values()) {
+      if (Math.hypot(b.x - p.x, b.y - p.y) < p.radius + BALL_R + 3) { SFX.touch(k, sp.pan); return; }
+    }
+    SFX.bounce(k, sp.pan);
+  }
+
+  // Yarış: ani hız değişimi = duvara ya da başka araca çarpma
+  const crashAt = new Map();
+  function crashSoundStep(step) {
+    const before = new Map();
+    for (const c of rsim.cars.values()) before.set(c.id, [c.vx, c.vy]);
+    step();
+    const t = performance.now();
+    for (const c of rsim.cars.values()) {
+      const v = before.get(c.id);
+      if (!v) continue;
+      const dv = Math.hypot(c.vx - v[0], c.vy - v[1]);
+      if (dv < 0.5 || t - (crashAt.get(c.id) || 0) < 250) continue;
+      const sp = c.id === myId ? { vol: 1, pan: 0 } : spatial(c.x, c.y);
+      if (!sp) continue;
+      crashAt.set(c.id, t);
+      SFX.crash(sp.vol * Math.min(1, (dv - 0.3) / 3), sp.pan);
+    }
+  }
+
+  const engines = new Map(); // araç id -> V8 motor sesi
+  let aPrev = null, aSpeed = 0, lastKind = null;
+  function audioFrame(dt, rr) {
+    if (!joined || !SFX.on || dt <= 0) {
+      for (const e of engines.values()) e.stop();
+      engines.clear();
+      return;
+    }
+    // --- Arazi: su, çamur, buz ---
+    const onFoot = !inMatch() && !inRace();
+    const kind = onFoot ? W.terrainAt(me.x, me.y).kind : null;
+    const moved = aPrev ? Math.hypot(me.x - aPrev.x, me.y - aPrev.y) : 0;
+    aPrev = { x: me.x, y: me.y };
+    const jump = moved > 300; // ışınlanma (tp, maça giriş) hareket sayılmaz
+    aSpeed += ((jump ? 0 : moved / dt) - aSpeed) * Math.min(1, dt * 10);
+    const water = kind && W.isWater(kind);
+    if (!jump && lastKind && kind) {
+      const wasWater = W.isWater(lastKind);
+      if (water && !wasWater) SFX.splash(0.35 + aSpeed / 900, 0);
+      else if (!water && wasWater) SFX.drip(0);
+      if (kind === 'mud' && lastKind !== 'mud') SFX.squelch(0.4 + aSpeed / 500, 0);
+      if (kind === 'ice' && lastKind !== 'ice') SFX.iceTick(0);
+    }
+    lastKind = kind;
+    SFX.loop('water').set(water ? Math.min(1, aSpeed / 350) : 0);
+    SFX.loop('mud').set(kind === 'mud' ? Math.min(1, aSpeed / 160) : 0);
+    SFX.loop('ice').set(kind === 'ice' ? Math.min(1, aSpeed / 700) : 0);
+    // Uzaktan nehir/göl uğultusu: kameranın suya uzaklığına göre
+    const cx = cam.x + wvw / 2, cy = cam.y + wvh / 2;
+    let amb = 0;
+    if (cx < W.CAMP_W + 400 && !inRace()) {
+      const L = W.LAKE;
+      const r = Math.hypot((cx - L.cx) / L.rx, (cy - L.cy) / L.ry);
+      const dL = (r - 1) * Math.min(L.rx, L.ry);
+      const dR = W.riverNearest(cx, cy).d - W.RIVER.width / 2;
+      amb = Math.max(0, Math.min(1, 1 - Math.max(0, Math.min(dL, dR)) / 650));
+    }
+    SFX.loop('river').set(amb);
+    // Maç sırasında tribün uğultusu
+    const fsp = lobby.running ? spatial(H.cx, H.cy, 1.6) : null;
+    SFX.loop('crowd').set(fsp ? (inMatch() ? 1 : fsp.vol) : 0);
+
+    // --- Yarış: V8 motorlar, lastik, kerb, çim ---
+    const want = new Map();
+    if (rr && (inRace() || nearTrack())) {
+      const list = [];
+      for (const [id, d] of rr) {
+        const sp = id === myId ? { vol: 1, pan: 0 } : spatial(d.x, d.y, 1.3);
+        if (sp && sp.vol > 0.03) list.push([id, d, sp]);
+      }
+      list.sort((a, b) => b[2].vol - a[2].vol);
+      for (const x of list.slice(0, 5)) want.set(x[0], x);
+    }
+    for (const [id, e] of engines) if (!want.has(id)) { e.stop(); engines.delete(id); }
+    for (const [id, [, d, sp]] of want) {
+      let e = engines.get(id);
+      if (!e) { e = SFX.engine(); if (!e) break; engines.set(id, e); }
+      const c = d.car;
+      const thr = c.finished ? 0 : id === myId ? inputBits() & 1 : c.input & 1;
+      e.update(RC.kmh(c), thr, id === myId ? 1 : sp.vol * 0.55, sp.pan, dt);
+    }
+    const mine = inRace() && rr ? rr.get(myId) : null;
+    let screech = 0, gravel = 0, kerb = 0;
+    if (mine) {
+      const c = mine.car, fx = Math.cos(mine.a), fy = Math.sin(mine.a);
+      const lat = Math.abs(-c.vx * fy + c.vy * fx), spd = Math.hypot(c.vx, c.vy);
+      const road = c.surface === 'road' || c.surface === 'kerb';
+      screech = road ? Math.max(0, Math.min(1, (lat - 0.45) / 1.4)) : 0;
+      gravel = road ? 0 : Math.min(1, spd / 4);
+      kerb = c.surface === 'kerb' ? Math.min(1, spd / 3) : 0;
+    }
+    SFX.loop('screech').set(screech);
+    SFX.loop('gravel').set(gravel);
+    SFX.loop('kerb').set(kerb);
   }
 
   // ---------- Hareket (arazi etkileri) ----------
@@ -2163,15 +2340,20 @@
   }
 
   // ---------- Ekran katmanı: geri sayım ve emoji menüsü ----------
-  let lastPhase = null;
+  let lastPhase = null, lastCount = 0;
   function drawOverlay() {
     const ph = lobby.running && meta ? meta.ph : null;
     if (ph !== lastPhase) {
-      if (lastPhase === 'countdown' && ph === 'kickoff') announce('BAŞLA!', '#fff', `${meta.half}. Devre`);
+      if (lastPhase === 'countdown' && ph === 'kickoff') {
+        announce('BAŞLA!', '#fff', `${meta.half}. Devre`);
+        if (inMatch() || nearField()) SFX.whistle('start');
+      }
       lastPhase = ph;
     }
     if (ph === 'countdown') {
       const n = Math.max(1, Math.ceil(meta.tmr / HB.TPS));
+      if (n !== lastCount && (inMatch() || nearField())) SFX.beep();
+      lastCount = n;
       ctx.save();
       ctx.font = '900 120px Nunito, Trebuchet MS, sans-serif';
       ctx.textAlign = 'center';
@@ -2334,6 +2516,7 @@
       drawCursor(self, me.x, me.y, time, true);
     }
     ctx.restore();
+    audioFrame(dt, rr);
     if (joined) drawMinimap();
     drawOverlay();
     drawStartLights();
