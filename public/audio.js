@@ -422,6 +422,27 @@
       tone({ f: 95, f2: 38, dur: 0.22, vol: 0.4 * v, pan, type: 'triangle' });
       burst({ filter: 'highpass', f: 3500, q: 1, dur: 0.08, vol: 0.12 * v, pan, delay: 0.02 });
     },
+    // Voleybol: el ile topa "pat", smaç şaklaması, kuma düşüş, fileye takılma
+    bump(v, pan) {
+      v = Math.min(1, v);
+      burst({ filter: 'bandpass', f: 1300, q: 1.4, dur: 0.06, vol: 0.32 * v, pan });
+      tone({ f: 320, f2: 150, dur: 0.09, vol: 0.28 * v, pan, type: 'triangle' });
+    },
+    spike(v, pan) {
+      v = Math.min(1, v);
+      burst({ filter: 'highpass', f: 1600, q: 0.8, dur: 0.06, vol: 0.55 * v, pan });
+      burst({ filter: 'bandpass', f: 700, q: 1, dur: 0.12, vol: 0.35 * v, pan });
+      tone({ f: 210, f2: 60, dur: 0.16, vol: 0.45 * v, pan });
+    },
+    sand(v, pan) {
+      burst({ filter: 'lowpass', f: 900, f2: 200, q: 0.7, dur: 0.28, vol: 0.4 * Math.min(1, v), pan, attack: 0.01 });
+      tone({ f: 90, f2: 45, dur: 0.12, vol: 0.2 * Math.min(1, v), pan });
+    },
+    netHit(v, pan) {
+      v = Math.min(1, v);
+      burst({ filter: 'bandpass', f: 2200, f2: 900, q: 3, dur: 0.35, vol: 0.25 * v, pan });
+      tone({ f: 140, f2: 90, dur: 0.25, vol: 0.18 * v, pan, type: 'triangle' });
+    },
     // Arayüz
     click() { tone({ f: 1100, f2: 700, dur: 0.06, vol: 0.12, type: 'triangle' }); },
     chat() { tone({ f: 988, dur: 0.08, vol: 0.06 }); tone({ f: 1319, dur: 0.1, vol: 0.05, delay: 0.06 }); },

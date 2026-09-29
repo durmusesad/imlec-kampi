@@ -177,6 +177,7 @@
       inAx = inAy = 0;
       radial = null;
       keys.clear();
+      mouseBits = 0;
       closeChat();
     }
     updateModeUi();
@@ -201,6 +202,12 @@
       radial.sel = len > 28 ? sectorOf(radial.vx, radial.vy) : -1;
       return;
     }
+    if (inVb()) {
+      // Voleybolda fare yerdeki nişanı gezdirir
+      aim.x = Math.max(-VB.boundX - 100, Math.min(VB.boundX + 100, aim.x + e.movementX / (zoom * VB.S)));
+      aim.y = Math.max(-VB.boundY - 80, Math.min(VB.boundY + 80, aim.y + e.movementY / (zoom * VB.S)));
+      return;
+    }
     inAx += e.movementX;
     inAy += e.movementY;
   });
@@ -213,6 +220,12 @@
 
   canvas.addEventListener('mousedown', (e) => {
     if (!joined || !locked) return; // normal modda tek tıklama hiçbir şey yapmaz
+    if (inVb()) {
+      // Voleybol: sol tık pas, sağ tık smaç (emoji menüsü yerine; emojiler 1–8 ile)
+      if (e.button === 0) mouseBits |= 16;
+      else if (e.button === 2) mouseBits |= 32;
+      return;
+    }
     if (e.button === 2) {
       radial = { vx: 0, vy: 0, sel: -1 };
       return;
@@ -238,8 +251,17 @@
         return;
       }
     }
+    for (const [name, pad] of Object.entries(W.VPADS)) {
+      if (W.inRect(me.x, me.y, pad)) {
+        SFX.click();
+        send({ t: 'vpad', pad: name });
+        return;
+      }
+    }
   });
   document.addEventListener('mouseup', (e) => {
+    if (e.button === 0) mouseBits &= ~16;
+    if (e.button === 2) mouseBits &= ~32;
     if (e.button === 2 && radial) pickRadial();
   });
   function pickRadial() {
@@ -255,6 +277,7 @@
   // ---------- Klavye ----------
   const KEYMAP = {
     KeyW: 1, ArrowUp: 1, KeyS: 2, ArrowDown: 2, KeyA: 4, ArrowLeft: 4, KeyD: 8, ArrowRight: 8, Space: 16, KeyX: 16,
+    ShiftLeft: 32, ShiftRight: 32, // voleybolda smaç
   };
   function inMatch() {
     return lobby.running && myId != null && (lobby.red.includes(myId) || lobby.blue.includes(myId));
@@ -266,12 +289,19 @@
     if (!locked || chatting) return 0;
     let k = 0;
     for (const c of keys) k |= KEYMAP[c] || 0;
+    if (inVb()) k |= mouseBits;
     return k;
   }
   document.addEventListener('keyup', (e) => keys.delete(e.code));
   // Sekme/pencere arka plana geçince tuşları bırak ve sunucuya hemen bildir
   function releaseAll() {
     keys.clear();
+    mouseBits = 0;
+    if (inVb() && vsim) {
+      vseq++;
+      vpending.push([vseq, 0, aim.x, aim.y]);
+      send({ t: 'vi', s: vseq, k: 0, ax: aim.x, ay: aim.y });
+    }
     if (inMatch() && sim) {
       seq++;
       pending.push([seq, 0]);
@@ -291,7 +321,7 @@
 
   document.addEventListener('keydown', (e) => {
     if (!joined || chatting || !locked) return; // normal modda tuşlar siteye gitmez
-    const playing = inMatch() || inRace();
+    const playing = inMatch() || inRace() || inVb();
     if (KEYMAP[e.code] && playing) {
       e.preventDefault();
       keys.add(e.code);
@@ -308,7 +338,7 @@
         openChat();
         return;
       case 'KeyL':
-        if (myTeam() || (lobby.racers || []).includes(myId)) send({ t: 'leave' });
+        if (myTeam() || myVTeam() || (lobby.racers || []).includes(myId)) send({ t: 'leave' });
         return;
       case 'KeyE':
         openEmojiPanel();
@@ -540,13 +570,16 @@
         }
         break;
       case 'lobby': {
-        const wasIn = inMatch(), wasRace = inRace();
+        const wasIn = inMatch(), wasRace = inRace(), wasVb = inVb();
         lobby = m;
         document.body.classList.toggle('in-match', inMatch());
         document.body.classList.toggle('in-race', inRace());
+        document.body.classList.toggle('in-vb', inVb());
         if (!m.running) resetMatchView();
         if (!m.raceRunning) resetRaceView();
-        if (wasIn !== inMatch() || wasRace !== inRace()) {
+        if (!m.vRunning) resetVView();
+        if (!wasVb && inVb()) resetAim();
+        if (wasIn !== inMatch() || wasRace !== inRace() || wasVb !== inVb()) {
           flashKeys(); // maça/yarışa girince/çıkınca ilgili tuşları kısaca göster
           keys.clear(); // sadece kendi durumum değişince; başkası takım değiştirince tuşlarım bırakılmasın
         }
@@ -570,6 +603,32 @@
         lastSnapAt = now;
         onRaceSnapshot(m);
         break;
+      case 'vg':
+        lastSnapAt = now;
+        onVSnapshot(m);
+        break;
+      case 'vpoint': {
+        scores = m.scores || scores;
+        renderPlayerList();
+        if (!(inVb() || nearCourt())) break;
+        const t = W.VB.teams[m.team];
+        const p = m.by != null ? players.get(m.by) : null;
+        const why = { in: p ? `${p.name} sahaya indirdi` : 'Top sahaya düştü', out: 'Dışarı!', double: 'Çift dokunuş', touches: '4. dokunuş' }[m.reason] || '';
+        announce(`${t.name} sayı`, t.color, `${why} · ${m.score.red} - ${m.score.blue}`);
+        SFX.whistle('start');
+        break;
+      }
+      case 'vend': {
+        if (!(inVb() || nearCourt())) break;
+        const t = m.winner ? W.VB.teams[m.winner] : null;
+        if (m.reason === 'empty') announce('Maç bitti', '#fff', 'Tüm oyuncular sahadan ayrıldı');
+        else {
+          announce(t ? `${t.name} kazandı!` : 'Berabere!', t ? t.color : '#fff', `${m.score.red} - ${m.score.blue}`);
+          SFX.whistle('end');
+          SFX.goal();
+        }
+        break;
+      }
       case 'rlights':
         lightsAt = performance.now();
         goAt = 0;
@@ -1202,6 +1261,453 @@
     resultsTimer = setTimeout(() => box.classList.add('hidden'), 10000);
   }
 
+  // ---------- Plaj voleybolu ----------
+  const VO = window.VOLLEY, VB = W.VB;
+  let vsim = null, vmeta = null, vacc = 0, vseq = 0, vpending = [], vprev = new Map();
+  const voffsets = new Map();
+  let vDelay = 2;
+  const aim = { x: VB.courtX / 2, y: 0 }; // fare nişanı (voleybol birimi)
+  let mouseBits = 0; // sol tık = pas, sağ tık = smaç (voleybolda)
+
+  function inVb() {
+    return !!lobby.vRunning && myId != null && ((lobby.vred || []).includes(myId) || (lobby.vblue || []).includes(myId));
+  }
+  function myVTeam() {
+    return (lobby.vred || []).includes(myId) ? 'red' : (lobby.vblue || []).includes(myId) ? 'blue' : null;
+  }
+  function nearCourt() {
+    const F = W.VFIELD, m = 200;
+    return cam.x + wvw > F.x - m && cam.x < F.x + F.w + m && cam.y + wvh > F.y - m && cam.y < F.y + F.h + m;
+  }
+  function resetVView() {
+    vsim = null;
+    vmeta = null;
+    vpending = [];
+    voffsets.clear();
+    vprev = new Map();
+    vacc = 0;
+  }
+  function resetAim() {
+    aim.x = myVTeam() === 'blue' ? -VB.courtX / 2 : VB.courtX / 2;
+    aim.y = 0;
+  }
+
+  function vPositions() {
+    const m = new Map();
+    for (const p of vsim.players.values()) m.set(p.id, { x: p.x, y: p.y, z: 0 });
+    const b = vsim.ball;
+    m.set('ball', { x: b.x, y: b.y, z: b.z });
+    return m;
+  }
+  function vStep(entry) {
+    vprev = vPositions();
+    if (entry) vsim.setInput(myId, entry[1], entry[2], entry[3]);
+    return vsim.step(true);
+  }
+  function vRender(alpha, noOffset) {
+    const out = new Map();
+    if (!vsim) return out;
+    for (const [id, c] of vPositions()) {
+      const p = vprev.get(id) || c;
+      const o = noOffset ? null : voffsets.get(id);
+      out.set(id, {
+        x: p.x + (c.x - p.x) * alpha + (o ? o.x : 0),
+        y: p.y + (c.y - p.y) * alpha + (o ? o.y : 0),
+        z: p.z + (c.z - p.z) * alpha + (o ? o.z : 0),
+      });
+    }
+    return out;
+  }
+  // Futbol/yarıştaki tahmin sistemiyle aynı; girdiyle birlikte nişan da yeniden oynatılır
+  function onVSnapshot(g) {
+    vmeta = g;
+    if (!lobby.vRunning) return;
+    if (!vsim) {
+      vsim = new VO.VMatch();
+      vsim.load(g);
+      vpending = [];
+      vprev = vPositions();
+      return;
+    }
+    const alpha = Math.min(1, vacc / TICK);
+    const before = vRender(alpha, true);
+    vsim.load(g);
+    const mine = g.p.find((q) => q[0] === myId);
+    if (mine) {
+      const ack = mine[10];
+      const want = Math.max(2, Math.min(3, mine[11] || 2));
+      if (want > vDelay) vDelay++;
+      else if (want < vDelay) vDelay--;
+      vpending = vpending.filter(([s]) => s > ack);
+      if (vpending.length > 90) vpending = vpending.slice(-90);
+      const upto = Math.max(0, vpending.length - vDelay);
+      for (let i = 0; i < upto; i++) vStep(vpending[i]);
+      if (!upto) vprev = vPositions();
+    } else {
+      vpending = [];
+      vprev = vPositions();
+    }
+    const after = vRender(alpha, true);
+    for (const [id, a] of after) {
+      const b = before.get(id);
+      if (!b) continue;
+      const o = voffsets.get(id) || { x: 0, y: 0, z: 0 };
+      o.x += b.x - a.x;
+      o.y += b.y - a.y;
+      o.z += b.z - a.z;
+      if (Math.hypot(o.x, o.y, o.z) > 60) { o.x = 0; o.y = 0; o.z = 0; }
+      voffsets.set(id, o);
+    }
+  }
+  function advanceV(dt) {
+    if (!vsim) return;
+    const playing = inVb() && vsim.players.has(myId);
+    vacc += dt;
+    let steps = 0;
+    while (vacc >= TICK && steps < 6) {
+      vacc -= TICK;
+      steps++;
+      const bz = vsim.ball.z;
+      let ev;
+      if (playing) {
+        const k = inputBits();
+        vseq++;
+        const e = [vseq, k, Math.round(aim.x * 10) / 10, Math.round(aim.y * 10) / 10];
+        vpending.push(e);
+        send({ t: 'vi', s: vseq, k, ax: e[2], ay: e[3] });
+        ev = vStep(vpending.length > vDelay ? vpending[vpending.length - 1 - vDelay] : null);
+      } else ev = vStep(null);
+      vSounds(ev, bz);
+    }
+    if (steps === 6) vacc = 0;
+    const decay = Math.exp(-dt * 14);
+    for (const o of voffsets.values()) { o.x *= decay; o.y *= decay; o.z *= decay; }
+  }
+
+  // Voleybol sesleri (tahmin adımlarından; düzeltme tekrarları ses çıkarmaz)
+  const vSndAt = {};
+  function vSounds(ev, bzBefore) {
+    const b = vsim.ball, w = W.vbToWorld(b.x, b.y), sp = spatial(w.x, w.y);
+    if (!sp) return;
+    const t = performance.now();
+    const once = (k, ms) => { if (t - (vSndAt[k] || 0) < ms) return false; vSndAt[k] = t; return true; };
+    for (const e of ev) if (e.type === 'net' && once('net', 300)) SFX.netHit(sp.vol, sp.pan);
+    if (bzBefore > 0 && b.z === 0 && once('land', 300)) SFX.sand(sp.vol, sp.pan);
+  }
+  // Vuruş sesi: son dokunuş (oyuncu + an) değişince bir kez. Tahminden de sunucu durumundan da gelse
+  // aynı dokunuş iki kez çalınmaz (tahmin ile sunucunun anı birkaç tick farklı olabilir)
+  let vHitSnd = { id: null, tick: 0 };
+  function vHitSound() {
+    if (!vsim) return;
+    const li = vsim.lastId, lt = vsim.lastTick;
+    if (li == null || !lt || (li === vHitSnd.id && Math.abs(lt - vHitSnd.tick) <= 15)) return;
+    vHitSnd = { id: li, tick: lt };
+    if (vsim.tick - lt > 20) return; // eski dokunuş (sayfaya yeni gelindi)
+    const b = vsim.ball, w = W.vbToWorld(b.x, b.y), sp = spatial(w.x, w.y);
+    if (!sp) return;
+    const hs = Math.hypot(b.vx, b.vy);
+    if (hs > 8.5) SFX.spike(sp.vol, sp.pan);
+    else if (hs > 5.5) SFX.kick(sp.vol * 0.9, sp.pan);
+    else if (hs < 2.2 && b.vz < 3.3) SFX.touch(sp.vol * 0.8, sp.pan);
+    else SFX.bump(sp.vol, sp.pan);
+  }
+
+  // Alan kutusu (futbol/yarış alanlarıyla aynı görünüm)
+  function padBox(pad, fill, title, lines, over) {
+    ctx.save();
+    if (over) {
+      ctx.translate(pad.x + pad.w / 2, pad.y + pad.h / 2);
+      ctx.scale(1.04, 1.04);
+      ctx.translate(-(pad.x + pad.w / 2), -(pad.y + pad.h / 2));
+    }
+    ctx.fillStyle = INK;
+    roundRect(ctx, pad.x + 4, pad.y + 5, pad.w, pad.h, 14);
+    ctx.fill();
+    ctx.fillStyle = fill;
+    roundRect(ctx, pad.x, pad.y, pad.w, pad.h, 14);
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.font = 'bold 19px Nunito, Trebuchet MS, sans-serif';
+    ctx.fillText(title, pad.x + pad.w / 2, pad.y + 10);
+    ctx.font = '600 13px Nunito, Trebuchet MS, sans-serif';
+    const shown = lines.slice(0, 3);
+    if (lines.length > 3) shown[2] = `+${lines.length - 2} kişi`;
+    shown.forEach((l, i) => ctx.fillText(l, pad.x + pad.w / 2, pad.y + 38 + i * 16));
+    ctx.restore();
+  }
+
+  function drawVPads() {
+    const P = W.VPADS;
+    if (!inView(P.start.x + 100, P.start.y, 500)) return;
+    const hover = joined && !inMatch() && !inRace() && !inVb() ? me : null;
+    const running = !!lobby.vRunning;
+    for (const [name, pad] of Object.entries(P)) {
+      let fill, title, lines;
+      if (name !== 'start') {
+        const t = VB.teams[name];
+        const ids = lobby['v' + name] || [];
+        fill = t.color;
+        title = (ids.includes(myId) ? '✓ ' : '') + `🏐 ${t.name}`;
+        lines = ids.map((id) => (players.get(id) || {}).name).filter(Boolean);
+        if (!lines.length) lines = ['(boş — tıkla, katıl)'];
+      } else {
+        const r = (lobby.vred || []).length, b = (lobby.vblue || []).length;
+        fill = running ? '#8a8a8a' : '#f0a93b';
+        title = !running ? '▶ Voleybolu Başlat' : isAdmin ? '⏹ Maçı Bitir' : '🏐 Maç sürüyor';
+        if (running) lines = [isAdmin ? 'Yönetici olarak bitir' : 'Sadece yönetici bitirebilir'];
+        else if (!r || !b) lines = ['Her takımda en az 1 kişi', `${r} - ${b}`];
+        else lines = [`${r} - ${b} oyuncu hazır · ${VB.winScore} sayı`];
+        if (!running && lobby.vLast) lines.push(`Son maç: ${lobby.vLast.score.red}-${lobby.vLast.score.blue}`);
+      }
+      padBox(pad, fill, title, lines, hover && W.inRect(hover.x, hover.y, pad));
+    }
+    ctx.fillStyle = 'rgba(59,47,36,0.75)';
+    ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('🏐 Plaj Voleybolu · fareyle nişan al, sol tık pas, sağ tık smaç', VB.cx, P.start.y + P.start.h + 12);
+  }
+
+  // Kort: sadece çizgiler ve file (zemin kumsalın kendisi)
+  function drawCourt() {
+    const S = VB.S, cx = VB.cx, cy = VB.cy;
+    const X = VB.courtX * S, Y = VB.courtY * S, A = VB.attackLine * S;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.92)';
+    ctx.lineWidth = 5;
+    ctx.strokeRect(cx - X, cy - Y, X * 2, Y * 2);
+    ctx.lineWidth = 3;
+    ctx.setLineDash([14, 10]);
+    for (const s of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + s * A, cy - Y);
+      ctx.lineTo(cx + s * A, cy + Y);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // File: gölgesi, ağ dokusu, üst bant ve direkler
+    const N = VB.netHalf * S, sh = VB.netH * S * 0.35;
+    ctx.fillStyle = 'rgba(40,30,20,0.18)';
+    ctx.beginPath();
+    ctx.moveTo(cx - 2, cy - N);
+    ctx.lineTo(cx + sh, cy - N + sh * 0.6);
+    ctx.lineTo(cx + sh, cy + N + sh * 0.6);
+    ctx.lineTo(cx - 2, cy + N);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(30,30,30,0.55)';
+    ctx.fillRect(cx - 4, cy - N, 8, N * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let y = cy - N; y <= cy + N; y += 8) { ctx.moveTo(cx - 4, y); ctx.lineTo(cx + 4, y); }
+    ctx.stroke();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - N);
+    ctx.lineTo(cx, cy + N);
+    ctx.stroke();
+    for (const s of [-1, 1]) {
+      ctx.fillStyle = '#4a4a4a';
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy + s * (N + 6), 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Sapma elipsi: vuruş yönünde uzun, ileriye kaymış
+  function drawSpread(bx, by, tx, ty, sp, color) {
+    const S = VB.S;
+    const a = Math.atan2(ty - by, tx - bx);
+    const w = W.vbToWorld(tx, ty);
+    ctx.save();
+    ctx.translate(w.x, w.y);
+    ctx.rotate(a);
+    ctx.translate(sp.bias * sp.along * S, 0);
+    ctx.fillStyle = color.replace('A', '0.13');
+    ctx.strokeStyle = color.replace('A', '0.85');
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, Math.max(4, sp.along * S), Math.max(4, sp.lat * S), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawVolley(time, vp) {
+    if (!inView(VB.cx, VB.cy, 1000)) return;
+    drawCourt();
+    drawVPads();
+    if (!vp || !vsim) return;
+    const S = VB.S;
+    const b = vp.get('ball');
+    const bw = W.vbToWorld(b.x, b.y);
+    // Topun ineceği yer (hafif işaret)
+    const L = vsim.phase === 'play' && vsim.ball.z > 0 ? VO.landing(vsim.ball) : null;
+    if (L) {
+      const lw = W.vbToWorld(L.x, L.y);
+      ctx.strokeStyle = 'rgba(59,47,36,0.35)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(lw.x, lw.y, 8, 0, Math.PI * 2);
+      ctx.moveTo(lw.x - 5, lw.y - 5); ctx.lineTo(lw.x + 5, lw.y + 5);
+      ctx.moveTo(lw.x + 5, lw.y - 5); ctx.lineTo(lw.x - 5, lw.y + 5);
+      ctx.stroke();
+    }
+    // Kendi nişanım ve sapma alanları
+    const q = inVb() ? vsim.players.get(myId) : null;
+    if (q) {
+      const ball = vsim.ball;
+      const serving = vsim.phase === 'serve' && vsim.server === myId;
+      const first = vsim.lastTeam !== q.team;
+      const dist = Math.hypot(aim.x - ball.x, aim.y - ball.y);
+      const base = { speed: Math.hypot(q.vx, q.vy), incoming: first && !serving ? Math.hypot(ball.vx, ball.vy, ball.vz) : 0 };
+      const passKind = serving ? 'serve' : 'pass';
+      const canSp = !serving && vsim.canSpike({ ...q, ax: aim.x }, Math.max(ball.z, VO.WINDOW.spike.min));
+      const hardKind = canSp ? 'spike' : 'drive';
+      drawSpread(ball.x, ball.y, aim.x, aim.y, VO.spread(passKind, dist, base), 'rgba(255,255,255,A)');
+      drawSpread(ball.x, ball.y, aim.x, aim.y, VO.spread(hardKind, dist, { ...base, goodSet: canSp && vsim.goodSet }),
+        canSp ? 'rgba(255,80,40,A)' : 'rgba(255,190,60,A)');
+      const aw = W.vbToWorld(aim.x, aim.y), mw = W.vbToWorld(q.x, q.y);
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.moveTo(mw.x, mw.y);
+      ctx.lineTo(aw.x, aw.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(aw.x, aw.y, 9, 0, Math.PI * 2);
+      ctx.moveTo(aw.x - 15, aw.y); ctx.lineTo(aw.x - 5, aw.y);
+      ctx.moveTo(aw.x + 5, aw.y); ctx.lineTo(aw.x + 15, aw.y);
+      ctx.moveTo(aw.x, aw.y - 15); ctx.lineTo(aw.x, aw.y - 5);
+      ctx.moveTo(aw.x, aw.y + 5); ctx.lineTo(aw.x, aw.y + 15);
+      ctx.stroke();
+      ctx.font = '800 12px Nunito, Trebuchet MS, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      const label = serving ? 'sol: servis · sağ: sert servis' : canSp ? 'SMAÇ hazır (sağ tık)' : '';
+      if (label) {
+        ctx.strokeText(label, aw.x + 18, aw.y - 14);
+        ctx.fillStyle = canSp ? '#ff9a7a' : '#fff';
+        ctx.fillText(label, aw.x + 18, aw.y - 14);
+      }
+      // Zamanlama halkası: top vurulabilir mesafedeyken; yeşil = ideal an
+      const d = Math.hypot(ball.x - q.x, ball.y - q.y);
+      if (!serving && vsim.phase === 'play' && d <= VO.REACH + 6 && ball.z <= VO.WINDOW.spike.max) {
+        const kind = canSp && ball.z >= VO.WINDOW.spike.min ? 'spike' : 'pass';
+        const te = VO.timingErr(kind, ball.z);
+        const me2 = vp.get(myId);
+        const dw = W.vbToWorld(me2.x, me2.y);
+        ctx.strokeStyle = te === 0 ? '#43d17a' : te < 0.5 ? '#f5c542' : '#ff5252';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(dw.x, dw.y, VB.player.radius * S + 10, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    // Oyuncular
+    for (const [id, d] of vp) {
+      if (id === 'ball') continue;
+      const pq = vsim.players.get(id);
+      if (!pq) continue;
+      drawDisc(players.get(id), W.vbToWorld(d.x, d.y), pq, id === myId, time);
+    }
+    // Top: yerde gölge, yükseldikçe yukarı kayar ve büyür
+    const z = Math.max(0, b.z);
+    ctx.fillStyle = `rgba(40,30,20,${0.35 * Math.max(0.25, 1 - z / 220)})`;
+    ctx.beginPath();
+    ctx.ellipse(bw.x, bw.y, VB.ball.radius * S * (1 - Math.min(0.5, z / 300)), VB.ball.radius * S * 0.6 * (1 - Math.min(0.5, z / 300)), 0, 0, Math.PI * 2);
+    ctx.fill();
+    const r = VB.ball.radius * S * (1 + z / 160);
+    const by = bw.y - z * S * 0.8;
+    ctx.save();
+    ctx.translate(bw.x, by);
+    ctx.rotate((vsim.tick / 8) % (Math.PI * 2));
+    ctx.fillStyle = '#ffe066';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.save();
+    ctx.clip();
+    ctx.strokeStyle = '#2f6fdd';
+    ctx.lineWidth = r * 0.45;
+    for (const k of [-1, 1]) {
+      ctx.beginPath();
+      ctx.arc(k * r * 1.2, 0, r * 1.05, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawVOverlay() {
+    if (!(lobby.vRunning && vmeta && vmeta.ph === 'countdown' && (inVb() || nearCourt()))) { lastVCount = 0; return; }
+    const n = Math.max(1, Math.ceil(vmeta.tmr / VO.TPS));
+    if (n !== lastVCount) SFX.beep();
+    lastVCount = n;
+    ctx.save();
+    ctx.font = '900 120px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = INK;
+    ctx.fillStyle = '#fff';
+    ctx.strokeText(String(n), vw / 2, vh * 0.4);
+    ctx.fillText(String(n), vw / 2, vh * 0.4);
+    ctx.font = '800 22px Nunito, Trebuchet MS, sans-serif';
+    ctx.lineWidth = 5;
+    ctx.strokeText('Voleybol başlıyor', vw / 2, vh * 0.4 + 80);
+    ctx.fillText('Voleybol başlıyor', vw / 2, vh * 0.4 + 80);
+    ctx.restore();
+  }
+  let lastVCount = 0, lastVPhase = null;
+
+  let vHudKey = '';
+  function updateVHud() {
+    const el = $('vscore');
+    const g = lobby.vRunning && vsim && (inVb() || nearCourt()) ? vsim : null;
+    let key = 'off';
+    if (g) {
+      const sv = players.get(g.server);
+      const touch = g.phase === 'play' && g.lastTeam ? `${VB.teams[g.lastTeam].name} ${g.touches}/3 dokunuş` : '';
+      const info = g.phase === 'serve' ? `Servis: ${sv ? sv.name : '—'}` : touch;
+      key = [g.score.red, g.score.blue, g.serveTeam, info].join('|');
+      if (key !== vHudKey) {
+        $('vRed').textContent = g.score.red;
+        $('vBlue').textContent = g.score.blue;
+        $('vRed').classList.toggle('srv', g.serveTeam === 'red');
+        $('vBlue').classList.toggle('srv', g.serveTeam === 'blue');
+        $('vInfo').textContent = info || `${VB.winScore} sayıda biter · 2 fark`;
+      }
+    }
+    document.body.classList.toggle('both-scores', !!g && !$('score').classList.contains('hidden'));
+    if (key === vHudKey) return;
+    vHudKey = key;
+    el.classList.toggle('hidden', !g);
+  }
+
   // ---------- Ping göstergesi ----------
   let rttMs = null, lastPongAt = 0, lastSnapAt = 0, pingKey = '';
   setInterval(() => {
@@ -1211,7 +1717,7 @@
     if (!joined) return;
     const now = performance.now();
     // Maçta/yarışta 0.4 sn'den uzun durum gelmezse ya da ping cevabı 5 sn gecikirse bağlantı zayıf
-    const playing = (inMatch() && sim) || (inRace() && rsim);
+    const playing = (inMatch() && sim) || (inRace() && rsim) || (inVb() && vsim);
     const weak = !connected || (playing && now - lastSnapAt > 400) || (lastPongAt && now - lastPongAt > 5000);
     const ms = rttMs == null ? null : Math.round(rttMs);
     const cls = weak ? 'bad weak' : ms == null ? '' : ms < 80 ? 'good' : ms < 150 ? 'ok' : 'bad';
@@ -1411,6 +1917,7 @@
       advance: (dt) => advanceSim(dt),
       get rp() { return lastRp; },
       get rr() { return lastRr; }, get rsim() { return rsim; }, get rpending() { return rpending; },
+      get vsim() { return vsim; }, get vpending() { return vpending; }, aim, setMouse: (b) => { mouseBits = b; }, get bits() { return inputBits(); },
       startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
       get stats() { return corrStats; },
       get delay() { return inputDelay(); },
@@ -1507,7 +2014,7 @@
       return;
     }
     // --- Arazi: su, çamur, buz ---
-    const onFoot = !inMatch() && !inRace();
+    const onFoot = !inMatch() && !inRace() && !inVb();
     const kind = onFoot ? W.terrainAt(me.x, me.y).kind : null;
     const moved = aPrev ? Math.hypot(me.x - aPrev.x, me.y - aPrev.y) : 0;
     aPrev = { x: me.x, y: me.y };
@@ -1538,7 +2045,8 @@
     SFX.loop('river').set(amb);
     // Maç sırasında tribün uğultusu
     const fsp = lobby.running ? spatial(H.cx, H.cy, 1.6) : null;
-    SFX.loop('crowd').set(fsp ? (inMatch() ? 1 : fsp.vol) : 0);
+    const vsp = lobby.vRunning ? spatial(VB.cx, VB.cy, 1.6) : null;
+    SFX.loop('crowd').set(Math.max(fsp ? (inMatch() ? 1 : fsp.vol) : 0, vsp ? (inVb() ? 1 : vsp.vol) : 0));
 
     // --- Yarış: V8 motorlar, lastik, kerb, çim ---
     const want = new Map();
@@ -1610,8 +2118,10 @@
     if (me.y < 0) { me.y = 0; me.vy = 0; }
     if (me.y > W.H) { me.y = W.H; me.vy = 0; }
     // Maç sürerken seyirciler sahaya giremez: en yakın kenara itilir
-    if (lobby.running && W.inRect(me.x, me.y, W.FIELD)) {
-      const F = W.FIELD, m = 2;
+    const fence = lobby.running && W.inRect(me.x, me.y, W.FIELD) ? W.FIELD
+      : lobby.vRunning && W.inRect(me.x, me.y, W.VFIELD) ? W.VFIELD : null;
+    if (fence) {
+      const F = fence, m = 2;
       const d = [me.x - F.x, F.x + F.w - me.x, me.y - F.y, F.y + F.h - me.y];
       const i = d.indexOf(Math.min(...d));
       if (i === 0) { me.x = F.x - m; me.vx = 0; }
@@ -1895,6 +2405,11 @@
     TRACKDRAW.drawMini(c, MM_S);
     c.save();
     c.scale(MM_S, MM_S);
+    c.strokeStyle = '#fff';
+    c.lineWidth = 14;
+    c.strokeRect(W.VB.cx - W.VB.courtX * W.VB.S, W.VB.cy - W.VB.courtY * W.VB.S, W.VB.courtX * 2 * W.VB.S, W.VB.courtY * 2 * W.VB.S);
+    c.fillStyle = '#555';
+    c.fillRect(W.VB.cx - 6, W.VB.cy - W.VB.netHalf * W.VB.S, 12, W.VB.netHalf * 2 * W.VB.S);
     c.fillStyle = '#5ab4e5';
     ellipse(c, W.LAKE);
     c.fill();
@@ -2245,6 +2760,14 @@
     ctx.arc(x0 + ball.x * MM_S, y0 + ball.y * MM_S, 2.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    if (vsim) {
+      const vb = W.vbToWorld(vsim.ball.x, vsim.ball.y);
+      ctx.fillStyle = '#ffe066';
+      ctx.beginPath();
+      ctx.arc(x0 + vb.x * MM_S, y0 + vb.y * MM_S, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
     for (const p of players.values()) {
       const pos = p.id === myId ? me : p.render;
       if (!pos) continue;
@@ -2448,12 +2971,16 @@
     last = time;
     advanceSim(dt);
     advanceRace(dt);
+    advanceV(dt);
+    vHitSound();
     const rp = sim ? renderPositions(Math.min(1, simAcc / TICK)) : null;
     lastRp = rp;
     const rr = rsim ? raceRender(Math.min(1, racc / TICK)) : null;
     lastRr = rr;
     const myDisc = inMatch() && rp ? rp.get(myId) : null;
     const myCar = inRace() && rr ? rr.get(myId) : null;
+    const vp = vsim ? vRender(Math.min(1, vacc / TICK)) : null;
+    const myV = inVb() && vp ? vp.get(myId) : null;
     camLead.x *= 0.9;
     camLead.y *= 0.9;
     if (myDisc) {
@@ -2471,7 +2998,16 @@
       inAx = inAy = 0;
       camLead.x = myCar.car.vx * 22;
       camLead.y = myCar.car.vy * 22;
-    } else if (joined && !inMatch() && !inRace()) stepMovement(dt);
+    } else if (myV) {
+      // Voleybolda kamera oyuncuyla nişan arasına bakar
+      const w = W.vbToWorld(myV.x, myV.y);
+      me.x = w.x;
+      me.y = w.y;
+      me.vx = me.vy = 0;
+      inAx = inAy = 0;
+      camLead.x = (aim.x - myV.x) * VB.S * 0.35;
+      camLead.y = (aim.y - myV.y) * VB.S * 0.35;
+    } else if (joined && !inMatch() && !inRace() && !inVb()) stepMovement(dt);
     // Yakınlaştırma yumuşak geçer; görünen alan değişirken kamera merkezi sabit kalsın
     const targetZoom = myCar ? RACE_ZOOM : 1;
     if (Math.abs(targetZoom - zoom) > 0.001) {
@@ -2502,16 +3038,17 @@
     drawPads(time);
     drawMatch(time, rp);
     drawRace(time, rr);
+    drawVolley(time, vp);
 
     const rt = time - INTERP_DELAY;
     for (const p of players.values()) {
       if (p.id === myId) continue;
       p.render = interp(p.snaps, rt);
-      if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
+      if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && !(vsim && vsim.players.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
         drawCursor(p, p.render.x, p.render.y, time, false);
       }
     }
-    if (joined && !myDisc && !myCar) {
+    if (joined && !myDisc && !myCar && !myV) {
       const self = players.get(myId) || { name: me.name, color: me.color, skin: me.skin };
       drawCursor(self, me.x, me.y, time, true);
     }
@@ -2519,8 +3056,10 @@
     audioFrame(dt, rr);
     if (joined) drawMinimap();
     drawOverlay();
+    drawVOverlay();
     drawStartLights();
     updateHud();
+    updateVHud();
     updateRaceHud();
     updatePing();
     requestAnimationFrame(frame);

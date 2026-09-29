@@ -55,6 +55,42 @@
     blue: { x: 1190, y: 995, w: 200, h: 90 },
   };
 
+  // Plaj voleybolu kortu: kampın altında, pistin solundaki boş kumsal. Fizik voleybol birimlerinde
+  // (merkez 0,0; file x=0 çizgisinde), dünyaya S katıyla ölçeklenir. z = yerden yükseklik (aynı birim)
+  const VB = {
+    S: 1.5,
+    cx: 1500,
+    cy: 2750,
+    courtX: 300, courtY: 150, // saha yarı ölçüleri (çizgiler)
+    boundX: 390, boundY: 215, // oyuncuların gidebileceği alan (saha dışı top kurtarmak için pay)
+    netH: 44, // file yüksekliği
+    netHalf: 165, // file direkten direğe (y yarı uzunluk); dışından geçen top out
+    attackLine: 100, // hücum çizgisi (fileden uzaklık)
+    spikeZone: 120, // smaç için fileye en fazla bu kadar uzakta olmalısın
+    gravity: 0.12,
+    reach: 10, // top ile oyuncu kenarı arasındaki vuruş payı
+    player: { radius: 15, accel: 0.11, damping: 0.95 },
+    ball: { radius: 9 },
+    teamMax: 4,
+    winScore: 11, maxScore: 15, // 11'de 2 farkla, en geç 15'te biter
+    countdownSeconds: 3,
+    pointSeconds: 2.5,
+    serveSeconds: 8, // servis bu sürede atılmazsa otomatik atılır
+    teams: {
+      red: { name: 'Kırmızı', color: '#e56e56' },
+      blue: { name: 'Mavi', color: '#5689e5' },
+    },
+  };
+  const vbToWorld = (x, y) => ({ x: VB.cx + x * VB.S, y: VB.cy + y * VB.S });
+  const VFIELD = {
+    x: VB.cx - VB.boundX * VB.S, y: VB.cy - VB.boundY * VB.S, w: VB.boundX * 2 * VB.S, h: VB.boundY * 2 * VB.S,
+  };
+  const VPADS = {
+    red: { x: VB.cx - 390, y: VFIELD.y + VFIELD.h + 45, w: 200, h: 90 },
+    start: { x: VB.cx - 100, y: VFIELD.y + VFIELD.h + 45, w: 200, h: 90 },
+    blue: { x: VB.cx + 190, y: VFIELD.y + VFIELD.h + 45, w: 200, h: 90 },
+  };
+
   const LAKE = { cx: 2330, cy: 560, rx: 420, ry: 280, mult: 0.45 };
   const RIVER = {
     width: 110,
@@ -139,7 +175,7 @@
   }
 
   return {
-    W, H, CAMP_W, CAMP_H, SPAWN, FIELD, HAX, PADS, toWorld,
+    W, H, CAMP_W, CAMP_H, SPAWN, FIELD, HAX, PADS, toWorld, VB, VFIELD, VPADS, vbToWorld,
     LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOJI_PALETTE, DEFAULT_QUICK, CHAT_MAX, TREES,
     terrainAt, riverNearest, inEllipse, inRect, isWater,
   };

@@ -206,6 +206,8 @@
   #keys h5, #keys .paused-title, #keys .resume { display: none; }
   body:not(.in-match) #keys .sec-match, body.in-match #keys .sec-lobby, body.in-race #keys .sec-lobby { display: none; }
   body:not(.in-race) #keys .sec-race { display: none; }
+  body:not(.in-vb) #keys .sec-volley, body.in-vb #keys .sec-lobby { display: none; }
+  body.paused #keys .sec-volley { display: block; }
   body.paused #keys {
     opacity: 1; left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%); padding: 18px 22px 16px;
     font-size: 14px; box-shadow: 5px 5px 0 var(--ink); transition: none;
@@ -231,6 +233,18 @@
   #score #sTime { font-variant-numeric: tabular-nums; min-width: 56px; text-align: center; }
   #score #sHalf { font-size: 12px; opacity: .75; }
   #score #sMsg { flex-basis: 100%; text-align: center; font-size: 12px; font-weight: 600; color: #ffd98a; }
+
+  /* Voleybol skor tablosu */
+  #vscore {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px;
+    background: #1a2130; color: #fff; border: 2px solid var(--ink); border-radius: 10px; padding: 5px 12px;
+    font: 700 18px Arial, sans-serif; box-shadow: 3px 3px 0 var(--ink); white-space: nowrap;
+  }
+  body.both-scores #vscore { top: 62px; }
+  #vscore .team { min-width: 34px; text-align: center; border-radius: 6px; padding: 2px 8px; }
+  #vscore .red { background: #e56e56; } #vscore .blue { background: #5689e5; }
+  #vscore .team.srv { outline: 3px solid #ffe066; }
+  #vscore #vInfo { font-size: 12px; font-weight: 600; color: #ffd98a; margin-left: 4px; }
 
   /* F1 yarış göstergesi */
   #raceHud {
@@ -302,6 +316,14 @@
     <span class="k"><kbd>Q</kbd></span><span class="lbl">Oyunu durdur (normal imleç)</span>
     <span class="k"><kbd>M</kbd></span><span class="lbl">Sesi aç / kapat</span>
   </div></section>
+  <section class="sec-volley"><h5>Voleybol</h5><div class="grid">
+    <span class="k"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="lbl">Hareket</span>
+    <span class="k"><kbd class="mouse">Fare</kbd></span><span class="lbl">Nişanı gezdir (top oraya düşer)</span>
+    <span class="k"><kbd class="mouse">Sol tık</kbd><span class="or">/</span><kbd class="wide">Space</kbd></span><span class="lbl">Pas · servis</span>
+    <span class="k"><kbd class="mouse">Sağ tık</kbd><span class="or">/</span><kbd>Shift</kbd></span><span class="lbl">Smaç · sert vuruş</span>
+    <span class="k"><kbd>1</kbd><span class="or">–</span><kbd>8</kbd></span><span class="lbl">Hızlı emoji</span>
+    <span class="k"><kbd>L</kbd></span><span class="lbl">Maçtan çık</span>
+  </div></section>
   <section class="sec-match"><h5>Maç</h5><div class="grid">
     <span class="k"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="lbl">Hareket (oklar da olur)</span>
     <span class="k"><kbd class="wide">Space</kbd></span><span class="lbl">Vuruş (topa değerken)</span>
@@ -327,6 +349,7 @@
 </div>
 <div id="raceResults" class="hidden"><div class="card"><h1 id="rrTitle">🏁 Yarış sonuçları</h1><p id="rrSub"></p><div id="rrList"></div></div></div>
 <div id="toast"></div>
+<div id="vscore" class="hidden"><span class="vt">🏐</span><span class="team red" id="vRed">0</span><span class="sep">:</span><span class="team blue" id="vBlue">0</span><span id="vInfo"></span></div>
 <div id="score" class="hidden"><span id="sHalf">1. Devre</span><span class="team red" id="sRed">0</span><span id="sTime">01:00</span><span class="team blue" id="sBlue">0</span><span id="sMsg" class="hidden"></span></div>
 
 <div id="join">
@@ -384,6 +407,7 @@
 <script src="haxball.js"></script>
 <script src="track.js"></script>
 <script src="racing.js"></script>
+<script src="volleyball.js"></script>
 <script src="trackdraw.js"></script>
 <script src="game.js"></script>
 </body>
