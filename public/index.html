@@ -23,7 +23,7 @@
   }
   .card {
     background: var(--paper); border: 3px solid var(--ink); border-radius: 18px;
-    padding: 28px 32px; width: 360px; box-shadow: 6px 6px 0 var(--ink); text-align: center;
+    padding: 28px 32px; width: 400px; box-shadow: 6px 6px 0 var(--ink); text-align: center;
   }
   .card h1 { margin: 0 0 4px; font-size: 32px; }
   .card p { margin: 0 0 18px; opacity: .75; }
@@ -31,11 +31,24 @@
     width: 100%; font: inherit; font-size: 18px; padding: 10px 12px; border: 2px solid var(--ink);
     border-radius: 10px; background: #fff; outline: none;
   }
-  .colors { display: flex; gap: 8px; justify-content: center; margin: 16px 0 20px; }
-  .colors button {
-    width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--ink); cursor: pointer; padding: 0;
+  .skinpick { margin: 14px 0 18px; text-align: left; }
+  .skinhead { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; margin-bottom: 6px; }
+  .skinhead span { font-weight: 800; opacity: .7; text-transform: uppercase; letter-spacing: .05em; font-size: 11px; }
+  .skinhead b { font-size: 14px; }
+  #skinTabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+  #skinTabs button {
+    font: inherit; font-size: 12px; font-weight: 800; padding: 4px 10px; border: 2px solid var(--ink); border-radius: 999px;
+    background: #fff; cursor: pointer;
   }
-  .colors button.sel { outline: 3px solid var(--ink); outline-offset: 2px; }
+  #skinTabs button.sel { background: var(--ink); color: var(--paper); }
+  #skinGrid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  #skinGrid .skin {
+    aspect-ratio: 1; padding: 0; border: 2px solid rgba(59,47,36,.25); border-radius: 10px; background: #fff; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #skinGrid .skin img { width: 44px; height: 44px; }
+  #skinGrid .skin:hover { border-color: var(--ink); background: #fff3dc; }
+  #skinGrid .skin.sel { border-color: var(--accent); background: #ffe8cc; outline: 2px solid var(--accent); }
   .card .go {
     font: inherit; font-size: 20px; font-weight: 800; padding: 10px 28px; border: 3px solid var(--ink);
     border-radius: 12px; background: var(--accent); color: #fff; cursor: pointer; box-shadow: 3px 3px 0 var(--ink);
@@ -312,7 +325,11 @@
     <h1>🏕️ İmleç Kampı</h1>
     <p>Arkadaşlarınla imleçlerinizi gezdirin, top oynayın.</p>
     <input id="name" maxlength="16" placeholder="Adın" autocomplete="off">
-    <div class="colors" id="colors"></div>
+    <div class="skinpick">
+      <div class="skinhead"><span>İmlecini seç</span><b id="skinName"></b></div>
+      <div id="skinTabs"></div>
+      <div id="skinGrid"></div>
+    </div>
     <button class="go" id="joinBtn">Katıl</button>
     <div class="help">Nehir seni sürükler, çamur yavaşlatır, buzda kayarsın.<br>Sahanın altındaki takım alanına tıkla, HaxBall maçı başlat!</div>
   </div>
@@ -353,6 +370,7 @@
 </div>
 
 <script src="world.js"></script>
+<script src="skins.js"></script>
 <script src="haxball.js"></script>
 <script src="track.js"></script>
 <script src="racing.js"></script>

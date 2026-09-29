@@ -8,6 +8,7 @@ const WORLD = require('./public/world.js');
 const { Match } = require('./public/haxball.js');
 const TRACK = require('./public/track.js');
 const RC = require('./public/racing.js');
+const SKINS = require('./public/skins.js');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC = path.join(__dirname, 'public');
@@ -216,7 +217,7 @@ function notice(p, text) {
 }
 
 function publicPlayer(p) {
-  return { id: p.id, name: p.name, color: p.color, x: p.x, y: p.y, afk: !!p.afk, typing: !!p.typing, admin: !!p.admin };
+  return { id: p.id, name: p.name, color: p.color, skin: p.skin, x: p.x, y: p.y, afk: !!p.afk, typing: !!p.typing, admin: !!p.admin };
 }
 
 function clamp(v, a, b) {
@@ -470,7 +471,9 @@ wss.on('connection', (ws) => {
         scores[me.id] = 0;
       }
       me.name = cleanText(m.name, 16) || 'İsimsiz';
-      me.color = WORLD.COLORS.includes(m.color) ? m.color : WORLD.COLORS[0];
+      // Skin: katalogda olmalı; renk (isim etiketi, sohbet, liste) skinden gelir
+      me.skin = SKINS.get(m.skin).id;
+      me.color = SKINS.labelColor(me.skin);
       me.admin = !!(adminKey && typeof m.adminKey === 'string' && safeEqual(m.adminKey, adminKey));
       send(ws, {
         t: 'welcome',

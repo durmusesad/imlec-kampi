@@ -70,19 +70,50 @@
   const saved = store.get('imlec-kampi:oyuncu', {}) || {};
   const nameInput = $('name');
   nameInput.value = saved.name || '';
-  me.color = W.COLORS.includes(saved.color) ? saved.color : W.COLORS[Math.floor(Math.random() * W.COLORS.length)];
-  const colorsEl = $('colors');
-  for (const c of W.COLORS) {
-    const b = document.createElement('button');
-    b.style.background = c;
-    b.title = c;
-    if (c === me.color) b.classList.add('sel');
-    b.onclick = () => {
-      me.color = c;
-      colorsEl.querySelectorAll('button').forEach((x) => x.classList.toggle('sel', x === b));
-    };
-    colorsEl.appendChild(b);
+  // Skin seçici: sayfalar (sekmeler) ve her sayfada skin önizlemeleri
+  const SK = window.SKINS;
+  me.skin = saved.skin && SK.LIST.some((s) => s.id === saved.skin) ? saved.skin : SK.PAGES[0].skins[Math.floor(Math.random() * 8)].id;
+  me.color = SK.labelColor(me.skin);
+  let skinPage = Math.max(0, SK.PAGES.findIndex((pg) => pg.skins.some((s) => s.id === me.skin)));
+  const skinPreviewCache = {};
+  function renderSkinPicker() {
+    const tabs = $('skinTabs'), grid = $('skinGrid');
+    tabs.innerHTML = '';
+    SK.PAGES.forEach((pg, i) => {
+      const b = document.createElement('button');
+      b.textContent = pg.name;
+      b.className = i === skinPage ? 'sel' : '';
+      b.onclick = () => { skinPage = i; renderSkinPicker(); };
+      tabs.appendChild(b);
+    });
+    grid.innerHTML = '';
+    for (const s of SK.PAGES[skinPage].skins) {
+      const b = document.createElement('button');
+      b.className = 'skin' + (s.id === me.skin ? ' sel' : '');
+      b.title = s.name;
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 96;
+      const c = cv.getContext('2d');
+      c.scale(2, 2);
+      c.translate(s.kind === 'emoji' ? 9 : 15, s.kind === 'emoji' ? 9 : 10);
+      c.scale(1.25, 1.25);
+      SK.draw(c, s.id, 0);
+      // Kanvası resme çevir: bulanık arka planlı giriş ekranında kanvaslar her tarayıcıda görünmeyebiliyor
+      const img = document.createElement('img');
+      img.src = skinPreviewCache[s.id] || (skinPreviewCache[s.id] = cv.toDataURL());
+      img.alt = s.name;
+      b.appendChild(img);
+      b.onclick = () => {
+        me.skin = s.id;
+        me.color = SK.labelColor(s.id);
+        $('skinName').textContent = s.name;
+        renderSkinPicker();
+      };
+      grid.appendChild(b);
+    }
+    $('skinName').textContent = SK.get(me.skin).name;
   }
+  renderSkinPicker();
   nameInput.focus();
   nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doJoin(); });
   $('joinBtn').onclick = doJoin;
@@ -91,7 +122,7 @@
     const name = nameInput.value.trim().slice(0, 16);
     if (!name) { nameInput.focus(); return; }
     me.name = name;
-    store.set('imlec-kampi:oyuncu', { name, color: me.color });
+    store.set('imlec-kampi:oyuncu', { name, skin: me.skin });
     joined = true;
     $('join').classList.add('hidden');
     ['players', 'keys', 'chatlog', 'ping'].forEach((id) => $(id).classList.remove('hidden'));
@@ -412,7 +443,7 @@
     ws = new WebSocket(`${proto}://${location.host}`);
     ws.onopen = () => {
       retries = 0;
-      ws.send(JSON.stringify({ t: 'join', name: me.name, color: me.color, x: me.x, y: me.y, token, adminKey: store.get('imlec-kampi:yonetici', null) }));
+      ws.send(JSON.stringify({ t: 'join', name: me.name, skin: me.skin, x: me.x, y: me.y, token, adminKey: store.get('imlec-kampi:yonetici', null) }));
     };
     ws.onmessage = (ev) => {
       let m;
@@ -445,7 +476,7 @@
   function addPlayer(p) {
     const old = players.get(p.id);
     players.set(p.id, {
-      id: p.id, name: p.name, color: p.color,
+      id: p.id, name: p.name, color: p.color, skin: p.skin,
       snaps: [{ t: performance.now(), x: p.x, y: p.y }],
       chat: old ? old.chat : null, emote: old ? old.emote : null,
       afk: !!p.afk, typing: !!p.typing, admin: !!p.admin,
@@ -938,7 +969,7 @@
   function drawCar(d, pl, isMe, time) {
     const c = d.car;
     if (!inView(d.x, d.y, 80)) return;
-    const color = pl ? pl.color : '#cfcfcf';
+    const color = pl ? SK.get(pl.skin).color : '#cfcfcf';
     // Lastik izi: araç yana kayıyorsa
     const fx = Math.cos(d.a), fy = Math.sin(d.a);
     const lat = Math.abs(-c.vx * fy + c.vy * fx);
@@ -1833,22 +1864,6 @@
     ctx.fillText('Takım alanına tıkla, hazır ol · Başlat’a tıkla, maç başlasın', 1000, 1098);
   }
 
-  const ARROW = [[0, 0], [0, 23], [5.5, 18], [9.5, 27], [13.5, 25.5], [9.5, 16.5], [16.5, 16.5]];
-  function arrowPath() {
-    ctx.beginPath();
-    ARROW.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
-    ctx.closePath();
-  }
-  function drawArrow(color) {
-    arrowPath();
-    ctx.fillStyle = color;
-    ctx.fill();
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 2.2;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-  }
-
   function wavePath(time, top) {
     // İmlecin (yerel koordinatta) su çizgisi; top=true ise suyun üstü, false ise altı
     const wl = 12, s = time / 1000;
@@ -1869,12 +1884,12 @@
       wavePath(time, false);
       ctx.clip();
       ctx.globalAlpha = 0.28;
-      drawArrow(p.color);
+      SK.draw(ctx, p.skin, time);
       ctx.restore();
       ctx.save();
       wavePath(time, true);
       ctx.clip();
-      drawArrow(p.color);
+      SK.draw(ctx, p.skin, time);
       ctx.restore();
       const s = time / 1000;
       ctx.strokeStyle = 'rgba(255,255,255,0.9)';
@@ -1886,7 +1901,7 @@
       }
       ctx.stroke();
     } else if (kind === 'mud') {
-      drawArrow(p.color);
+      SK.draw(ctx, p.skin, time);
       ctx.fillStyle = 'rgba(106,76,48,0.55)';
       ctx.beginPath();
       ctx.moveTo(-2, 16);
@@ -1895,7 +1910,7 @@
       ctx.lineTo(-2, 30);
       ctx.fill();
     } else {
-      drawArrow(p.color);
+      SK.draw(ctx, p.skin, time);
     }
 
     // İsim etiketi
@@ -2315,7 +2330,7 @@
       }
     }
     if (joined && !myDisc && !myCar) {
-      const self = players.get(myId) || { name: me.name, color: me.color };
+      const self = players.get(myId) || { name: me.name, color: me.color, skin: me.skin };
       drawCursor(self, me.x, me.y, time, true);
     }
     ctx.restore();
