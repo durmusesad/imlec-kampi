@@ -443,6 +443,12 @@
       burst({ filter: 'bandpass', f: 2200, f2: 900, q: 3, dur: 0.35, vol: 0.25 * v, pan });
       tone({ f: 140, f2: 90, dur: 0.25, vol: 0.18 * v, pan, type: 'triangle' });
     },
+    // Balıklama: kuma sürtünen hışırtı
+    dash(v, pan) {
+      v = Math.min(1, v);
+      burst({ filter: 'bandpass', f: 600, f2: 2400, q: 0.8, dur: 0.22, vol: 0.3 * v, pan, attack: 0.02 });
+      burst({ filter: 'lowpass', f: 700, f2: 200, q: 0.7, dur: 0.35, vol: 0.25 * v, pan, delay: 0.12 });
+    },
     // Arayüz
     click() { tone({ f: 1100, f2: 700, dur: 0.06, vol: 0.12, type: 'triangle' }); },
     chat() { tone({ f: 988, dur: 0.08, vol: 0.06 }); tone({ f: 1319, dur: 0.1, vol: 0.05, delay: 0.06 }); },

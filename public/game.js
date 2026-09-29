@@ -277,7 +277,7 @@
   // ---------- Klavye ----------
   const KEYMAP = {
     KeyW: 1, ArrowUp: 1, KeyS: 2, ArrowDown: 2, KeyA: 4, ArrowLeft: 4, KeyD: 8, ArrowRight: 8, Space: 16, KeyX: 16,
-    ShiftLeft: 32, ShiftRight: 32, // voleybolda smaç
+    ShiftLeft: 64, ShiftRight: 64, // voleybolda balıklama
   };
   function inMatch() {
     return lobby.running && myId != null && (lobby.red.includes(myId) || lobby.blue.includes(myId));
@@ -1470,7 +1470,7 @@
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('🏐 Plaj Voleybolu · fareyle nişan al, sol tık pas, sağ tık smaç', VB.cx, P.start.y + P.start.h + 12);
+    ctx.fillText('🏐 Plaj Voleybolu · fareyle nişan al · sol tık pas · sağ tık smaç · Shift balıklama', VB.cx, P.start.y + P.start.h + 12);
   }
 
   // Kort: sadece çizgiler ve file (zemin kumsalın kendisi)
@@ -1608,25 +1608,51 @@
         ctx.fillStyle = canSp ? '#ff9a7a' : '#fff';
         ctx.fillText(label, aw.x + 18, aw.y - 14);
       }
-      // Zamanlama halkası: top vurulabilir mesafedeyken; yeşil = ideal an
+      // Vuruş menzili: her zaman silik halka; gölge menzile girince renklenir (yeşil = ideal an)
       const d = Math.hypot(ball.x - q.x, ball.y - q.y);
-      if (!serving && vsim.phase === 'play' && d <= VO.REACH + 6 && ball.z <= VO.WINDOW.spike.max) {
+      const me2 = vp.get(myId);
+      const dw = W.vbToWorld(me2.x, me2.y);
+      const inReach = !serving && vsim.phase === 'play' && d <= VO.REACH && ball.z <= VO.WINDOW.spike.max;
+      ctx.lineWidth = inReach ? 3.5 : 1.5;
+      if (inReach) {
         const kind = canSp && ball.z >= VO.WINDOW.spike.min ? 'spike' : 'pass';
         const te = VO.timingErr(kind, ball.z);
-        const me2 = vp.get(myId);
-        const dw = W.vbToWorld(me2.x, me2.y);
         ctx.strokeStyle = te === 0 ? '#43d17a' : te < 0.5 ? '#f5c542' : '#ff5252';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(dw.x, dw.y, VB.player.radius * S + 10, 0, Math.PI * 2);
-        ctx.stroke();
-      }
+      } else ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.beginPath();
+      ctx.arc(dw.x, dw.y, (VO.REACH - VB.ball.radius) * S, 0, Math.PI * 2);
+      ctx.stroke();
     }
     // Oyuncular
     for (const [id, d] of vp) {
       if (id === 'ball') continue;
       const pq = vsim.players.get(id);
       if (!pq) continue;
+      const dw = W.vbToWorld(d.x, d.y);
+      if (pq.dashT > VO.DASH.recover) {
+        // Balıklama izi
+        ctx.fillStyle = 'rgba(236,217,164,0.9)';
+        ctx.strokeStyle = 'rgba(160,130,80,0.5)';
+        for (let i = 1; i <= 3; i++) {
+          ctx.beginPath();
+          ctx.arc(dw.x - pq.vx * S * i * 2.2, dw.y - pq.vy * S * i * 2.2, 6 - i, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+      if (pq.dashT > 0 && !vDashSnd.has(id)) {
+        vDashSnd.add(id);
+        const sp = spatial(dw.x, dw.y);
+        if (sp) SFX.dash(sp.vol, sp.pan);
+      } else if (pq.dashT === 0) vDashSnd.delete(id);
+      if (id === myId && pq.dashCd > 0) {
+        // Balıklama bekleme süresi: diskin çevresinde dolan yay
+        ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(dw.x, dw.y, VB.player.radius * S + 5, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - pq.dashCd / VO.DASH.cooldown));
+        ctx.stroke();
+      }
       drawDisc(players.get(id), W.vbToWorld(d.x, d.y), pq, id === myId, time);
     }
     // Top: yerde gölge, yükseldikçe yukarı kayar ve büyür
@@ -1637,6 +1663,17 @@
     ctx.fill();
     const r = VB.ball.radius * S * (1 + z / 160);
     const by = bw.y - z * S * 0.8;
+    if (z > 4) {
+      // Top ile gölgesi arasında ince çizgi: topun gerçek yeri gölgedir
+      ctx.strokeStyle = 'rgba(40,30,20,0.25)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(bw.x, bw.y);
+      ctx.lineTo(bw.x, by + r);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     ctx.save();
     ctx.translate(bw.x, by);
     ctx.rotate((vsim.tick / 8) % (Math.PI * 2));
@@ -1683,6 +1720,7 @@
     ctx.restore();
   }
   let lastVCount = 0, lastVPhase = null;
+  const vDashSnd = new Set();
 
   let vHudKey = '';
   function updateVHud() {

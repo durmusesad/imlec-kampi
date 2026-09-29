@@ -68,8 +68,9 @@
     attackLine: 100, // hücum çizgisi (fileden uzaklık)
     spikeZone: 120, // smaç için fileye en fazla bu kadar uzakta olmalısın
     gravity: 0.12,
-    reach: 10, // top ile oyuncu kenarı arasındaki vuruş payı
-    player: { radius: 15, accel: 0.11, damping: 0.95 },
+    reach: 24, // top ile oyuncu kenarı arasındaki vuruş payı
+    player: { radius: 15, accel: 0.12, damping: 0.95 },
+    dash: { speed: 5, ticks: 10, cooldown: 90, recover: 22 }, // balıklama: hız (birim/tick), süre, bekleme, kalkma
     ball: { radius: 9 },
     teamMax: 4,
     winScore: 11, maxScore: 15, // 11'de 2 farkla, en geç 15'te biter

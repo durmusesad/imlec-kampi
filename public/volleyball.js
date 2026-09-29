@@ -14,23 +14,24 @@
   const P = V.player, B = V.ball;
   const TPS = 60;
   const G = V.gravity;
-  const INPUT = { UP: 1, DOWN: 2, LEFT: 4, RIGHT: 8, PASS: 16, SPIKE: 32 };
+  const INPUT = { UP: 1, DOWN: 2, LEFT: 4, RIGHT: 8, PASS: 16, SPIKE: 32, DASH: 64 };
+  const D = V.dash;
   const PMAX = P.accel / (1 - P.damping); // oyuncunun son hızı
   const REACH = P.radius + B.radius + V.reach;
 
   // Vuruş türleri: uçuş süresi (tick) = t0 + tk × mesafe; sapma (elips yarı eksenleri) = taban + k × mesafe.
   // bias: sapmanın vuruş yönünde ileri kayması (sert vuruş uzun kaçar)
   const SHOTS = {
-    pass: { t0: 48, tk: 0.11, along: 6, alongK: 0.045, lat: 5, latK: 0.03, bias: 0.1 },
-    serve: { t0: 50, tk: 0.1, along: 12, alongK: 0.05, lat: 9, latK: 0.03, bias: 0.15 },
+    pass: { t0: 56, tk: 0.12, along: 6, alongK: 0.045, lat: 5, latK: 0.03, bias: 0.1 },
+    serve: { t0: 58, tk: 0.11, along: 12, alongK: 0.05, lat: 9, latK: 0.03, bias: 0.15 },
     drive: { t0: 26, tk: 0.07, along: 20, alongK: 0.075, lat: 11, latK: 0.035, bias: 0.3 },
     spike: { t0: 14, tk: 0.045, along: 24, alongK: 0.09, lat: 11, latK: 0.04, bias: 0.35 },
   };
   // Topa değilebilecek yükseklik aralığı ve ideal aralık (zamanlama)
   const WINDOW = {
-    pass: { min: 0, max: 50, lo: 10, hi: 28, soft: 20 },
-    drive: { min: 0, max: 72, lo: 10, hi: 40, soft: 20 },
-    spike: { min: 36, max: 72, lo: 46, hi: 62, soft: 10 },
+    pass: { min: 0, max: 62, lo: 6, hi: 36, soft: 26 },
+    drive: { min: 0, max: 76, lo: 6, hi: 44, soft: 26 },
+    spike: { min: 34, max: 78, lo: 44, hi: 66, soft: 14 },
   };
 
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -58,8 +59,9 @@
     let m = 1;
     m *= 1 + 1.6 * (o.timing || 0);
     m *= 1 + 0.7 * clamp((o.speed || 0) / PMAX, 0, 1);
-    m *= 1 + 1.4 * clamp(((o.incoming || 0) - 3) / 6, 0, 1);
+    m *= 1 + 1.0 * clamp(((o.incoming || 0) - 3) / 6, 0, 1);
     if (o.goodSet) m *= 0.7;
+    if (o.dive) m *= 1.6; // balıklamayla karşılanan top daha dağınık gider
     return { along: (s.along + s.alongK * dist) * m, lat: (s.lat + s.latK * dist) * m, bias: s.bias };
   }
 
@@ -105,7 +107,7 @@
     }
 
     addPlayer(id, team) {
-      const p = { id, team, x: 0, y: 0, vx: 0, vy: 0, input: 0, ax: 0, ay: 0, ready: true };
+      const p = { id, team, x: 0, y: 0, vx: 0, vy: 0, input: 0, ax: 0, ay: 0, ready: true, dashCd: 0, dashT: 0, dashReady: true };
       this.players.set(id, p);
       this.place(p);
       return p;
@@ -119,7 +121,7 @@
     setInput(id, bits, ax, ay) {
       const p = this.players.get(id);
       if (!p) return;
-      p.input = bits & 63;
+      p.input = bits & 127;
       if (typeof ax === 'number' && Number.isFinite(ax)) p.ax = clamp(ax, -V.boundX - 150, V.boundX + 150);
       if (typeof ay === 'number' && Number.isFinite(ay)) p.ay = clamp(ay, -V.boundY - 150, V.boundY + 150);
     }
@@ -245,10 +247,25 @@
         if (p.input & INPUT.DOWN) dy += 1;
         if (p.input & INPUT.LEFT) dx -= 1;
         if (p.input & INPUT.RIGHT) dx += 1;
-        if (dx || dy) {
-          const l = Math.sqrt(dx * dx + dy * dy);
-          p.vx += (dx / l) * P.accel;
-          p.vy += (dy / l) * P.accel;
+        const l = Math.sqrt(dx * dx + dy * dy);
+        // Balıklama: tuşa basıldığı an hareket yönüne (yön yoksa topun gölgesine) ani atılış
+        if (p.dashCd > 0) p.dashCd--;
+        if (p.dashT > 0) p.dashT--;
+        if (!(p.input & INPUT.DASH)) p.dashReady = true;
+        else if (p.dashReady && p.dashCd === 0 && this.phase !== 'serve') {
+          let ux = l ? dx / l : this.ball.x - p.x, uy = l ? dy / l : this.ball.y - p.y;
+          const ul = Math.hypot(ux, uy) || 1;
+          p.vx = (ux / ul) * D.speed;
+          p.vy = (uy / ul) * D.speed;
+          p.dashT = D.ticks + D.recover;
+          p.dashCd = D.cooldown;
+          p.dashReady = false;
+        }
+        // Atılış sırasında yön değiştirilemez; sonra kısa süre yerden kalkıyor (yavaş)
+        if (l && p.dashT <= D.recover) {
+          const acc = p.dashT > 0 ? P.accel * 0.35 : P.accel;
+          p.vx += (dx / l) * acc;
+          p.vy += (dy / l) * acc;
         }
         p.x += p.vx;
         p.y += p.vy;
@@ -307,7 +324,7 @@
       // Hiçbir şeye basmayan oyuncuya düşen top gövdeden rastgele seker (dokunuş sayılır)
       for (const p of this.players.values()) {
         const dx = b.x - p.x, dy = b.y - p.y, d = Math.hypot(dx, dy);
-        if (d > P.radius + B.radius || b.z > 22 || b.vz > 0) continue;
+        if (d > P.radius + B.radius + 4 || b.z > 26 || b.vz > 0) continue;
         if (this.lastId === p.id && this.tick - this.lastTick < 20) continue;
         if (!this.touch(p, ev)) return;
         const r1 = rnd(this.tick, p.id, 7), r2 = rnd(this.tick, p.id, 8);
@@ -365,6 +382,7 @@
         speed: Math.hypot(p.vx, p.vy),
         incoming: !serve && firstTouch ? incoming : 0,
         goodSet: kind === 'spike' && this.goodSet,
+        dive: p.dashT > 0,
       });
       // Üçgen dağılım: çoğu vuruş merkeze yakın, azı kenara
       const u = rnd(this.tick, p.id, 1) + rnd(this.tick, p.id, 2) - 1;
@@ -447,7 +465,8 @@
       const p = [];
       for (const q of this.players.values()) {
         const [ack, buf] = acks ? acks(q.id) : [0, 2];
-        p.push([q.id, q.team === 'red' ? 0 : 1, r(q.x), r(q.y), r(q.vx), r(q.vy), q.input, q.ready ? 1 : 0, r(q.ax), r(q.ay), ack, buf]);
+        p.push([q.id, q.team === 'red' ? 0 : 1, r(q.x), r(q.y), r(q.vx), r(q.vy), q.input, q.ready ? 1 : 0, r(q.ax), r(q.ay), ack, buf,
+          q.dashCd, q.dashT, q.dashReady ? 1 : 0]);
       }
       const b = this.ball;
       return {
@@ -460,11 +479,11 @@
 
     load(g) {
       const seen = new Set();
-      for (const [id, t, x, y, vx, vy, input, ready, ax, ay] of g.p) {
+      for (const [id, t, x, y, vx, vy, input, ready, ax, ay, , , dashCd, dashT, dashReady] of g.p) {
         seen.add(id);
         let q = this.players.get(id);
         if (!q) q = this.addPlayer(id, t ? 'blue' : 'red');
-        Object.assign(q, { team: t ? 'blue' : 'red', x, y, vx, vy, input, ready: !!ready, ax, ay });
+        Object.assign(q, { team: t ? 'blue' : 'red', x, y, vx, vy, input, ready: !!ready, ax, ay, dashCd, dashT, dashReady: !!dashReady });
       }
       for (const id of [...this.players.keys()]) if (!seen.has(id)) this.players.delete(id);
       const b = this.ball;
@@ -500,5 +519,5 @@
     }
   }
 
-  return { VMatch, INPUT, TPS, SHOTS, WINDOW, REACH, PMAX, spread, timingErr, landing };
+  return { VMatch, INPUT, TPS, DASH: D, SHOTS, WINDOW, REACH, PMAX, spread, timingErr, landing };
 });

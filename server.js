@@ -646,7 +646,7 @@ wss.on('connection', (ws) => {
         if (!num(m.s) || !num(m.k) || !num(m.ax) || !num(m.ay)) return;
         if (!(vmatch && vmatch.players.has(me.id))) return;
         const c = chan(me, 'v');
-        c.queue.push([m.s, m.k & 63, clamp(m.ax, -600, 600), clamp(m.ay, -400, 400)]);
+        c.queue.push([m.s, m.k & 127, clamp(m.ax, -600, 600), clamp(m.ay, -400, 400)]);
         c.lastInputAt = Date.now();
         if (c.queue.length > 8) c.queue.splice(0, c.queue.length - 8);
         break;
@@ -871,7 +871,7 @@ function pullInput(p, c, now, set) {
   // Tamponu aşan fazlalık gecikme demektir; atılan girdideki vuruş basışı korunur
   while (c.queue.length > c.buf) {
     const drop = c.queue.shift();
-    c.queue[0][1] |= drop[1] & 48;
+    c.queue[0][1] |= drop[1] & 112; // atılan girdideki vuruş/smaç/balıklama basışı korunur
   }
 }
 
