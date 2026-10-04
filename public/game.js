@@ -7,6 +7,7 @@
   const INTERP_DELAY = 100; // ms — diğer imleçler bu kadar geriden çizilir
   const SEND_EVERY = 33; // ms (~30 Hz)
   const TICK = 1 / HB.TPS;
+  const BOT_PADS = W.botPadList(window.TRACK); // "+ Bot / − Bot" kutuları (sunucuyla aynı sıra)
   // Kendi girdimizi kaç adım geç uygulayalım: sunucudaki girdi tamponu kadar (2–5 adım, 33–83 ms).
   // Böylece dünya daha az ileriye tahmin edilir; top/rakip ışınlanmaları büyük ölçüde kaybolur
   let inputDelayTicks = 2;
@@ -237,6 +238,13 @@
     }
     if (inMatch() || inRace() || inHk()) return;
     // Sol tık sadece etkileşimli alanlarda bir şey yapar (boş yere tıklamak hiçbir şey göndermez)
+    for (let i = 0; i < BOT_PADS.length; i++) {
+      if (W.inRect(me.x, me.y, BOT_PADS[i].r)) {
+        SFX.click();
+        send({ t: 'bot', i });
+        return;
+      }
+    }
     for (const [name, pad] of Object.entries(W.PADS)) {
       if (W.inRect(me.x, me.y, pad)) {
         SFX.click();
@@ -1515,7 +1523,7 @@
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('🏐 Plaj Voleybolu · fareyle nişan al · sol tık pas · sağ tık smaç · Shift balıklama', VB.cx, P.start.y + P.start.h + 12);
+    ctx.fillText('🏐 Plaj Voleybolu · fareyle nişan al · sol tık pas · sağ tık smaç · Shift balıklama', VB.cx, P.start.y + P.start.h + 58);
   }
 
   // Kort: sadece çizgiler ve file (zemin kumsalın kendisi)
@@ -2055,7 +2063,7 @@
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('🏒 Buz Hokeyi · yön tuşlarıyla kay · Space şut · kalenin arkasından dolanabilirsin', HK.cx, P.start.y + P.start.h + 12);
+    ctx.fillText('🏒 Buz Hokeyi · yön tuşlarıyla kay · Space şut · kalenin arkasından dolanabilirsin', HK.cx, P.start.y + P.start.h + 58);
   }
 
   // Paten izleri: kayan oyuncunun arkasında kısa süre kalan ince çizgiler
@@ -2229,6 +2237,40 @@
     if (key === hHudKey) return;
     hHudKey = key;
     $('hscore').classList.toggle('hidden', !g);
+  }
+
+  // Bot kutuları: takım alanlarının altında küçük düğmeler
+  function drawBotPads() {
+    const hover = joined && !inMatch() && !inRace() && !inVb() && !inHk() ? me : null;
+    const teams = { f: H.teams, v: W.VB.teams, h: W.HK.teams };
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 14px Nunito, Trebuchet MS, sans-serif';
+    for (const bp of BOT_PADS) {
+      const r = bp.r;
+      if (!inView(r.x + r.w / 2, r.y, 200)) continue;
+      const over = hover && W.inRect(hover.x, hover.y, r);
+      const base = bp.team ? teams[bp.g][bp.team].color : '#2e7d32';
+      ctx.fillStyle = INK;
+      roundRect(ctx, r.x + 3, r.y + 4, r.w, r.h, 10);
+      ctx.fill();
+      ctx.fillStyle = over ? '#fff8ec' : base;
+      roundRect(ctx, r.x, r.y, r.w, r.h, 10);
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      if (bp.op === 'del') {
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        roundRect(ctx, r.x, r.y, r.w, r.h, 10);
+        ctx.fill();
+      }
+      ctx.fillStyle = over ? INK : '#fff';
+      const label = bp.op === 'add' ? '+ 🤖 Bot' : bp.op === 'del' ? '− 🤖 Bot' : '🤖 Startı botlarla doldur';
+      ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 1);
+    }
+    ctx.restore();
   }
 
   // ---------- Ping göstergesi ----------
@@ -3049,7 +3091,7 @@
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('Takım alanına tıkla, hazır ol · Başlat’a tıkla, maç başlasın', 1000, 1098);
+    ctx.fillText('Takım alanına tıkla, hazır ol · Başlat’a tıkla, maç başlasın', 1000, 1146);
   }
 
   function wavePath(time, top) {
@@ -3330,7 +3372,7 @@
     ctx.stroke();
   }
 
-  function drawDisc(pl, d, q, isMe, time, r, teams) {
+  function drawDisc(pl, d, q, isMe, time, r = H.player.radius * H.S, teams = H.teams) {
     const S = H.S;
     ctx.fillStyle = teams[q.team].color;
     ctx.beginPath();
@@ -3557,6 +3599,7 @@
     drawRace(time, rr);
     drawVolley(time, vp);
     drawHockey(time, hp);
+    drawBotPads();
 
     const rt = time - INTERP_DELAY;
     for (const p of players.values()) {

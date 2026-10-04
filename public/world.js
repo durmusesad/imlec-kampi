@@ -72,7 +72,7 @@
     player: { radius: 15, accel: 0.12, damping: 0.95 },
     dash: { speed: 5, ticks: 10, cooldown: 90, recover: 22 }, // balıklama: hız (birim/tick), süre, bekleme, kalkma
     ball: { radius: 9 },
-    teamMax: 4,
+    teamMax: 5,
     winScore: 11, maxScore: 15, // 11'de 2 farkla, en geç 15'te biter
     countdownSeconds: 3,
     pointSeconds: 2.5,
@@ -209,6 +209,25 @@
     return { kind: 'sand', mult: 1, max: MAX_STEP.land };
   }
 
+  // Bot ekleme kutuları: her takım alanının altında "+ Bot" / "− Bot", yarışta ayrıca "Doldur".
+  // Sunucu ve tarayıcı aynı listeyi kullanır (mesajda sıra numarası gider). TRACK dışarıdan verilir
+  function botPadList(TRACK) {
+    const under = (pad, x, w) => ({ x, y: pad.y + pad.h + 10, w, h: 36 });
+    const list = [];
+    for (const [g, P] of [['f', PADS], ['v', VPADS], ['h', HPADS]]) {
+      for (const team of ['red', 'blue']) {
+        const pad = P[team], w = (pad.w - 10) / 2;
+        list.push({ g, team, op: 'add', r: under(pad, pad.x, w) });
+        list.push({ g, team, op: 'del', r: under(pad, pad.x + w + 10, w) });
+      }
+    }
+    const J = TRACK.PADS.join, S = TRACK.PADS.start, w = (J.w - 10) / 2;
+    list.push({ g: 'r', team: null, op: 'add', r: under(J, J.x, w) });
+    list.push({ g: 'r', team: null, op: 'del', r: under(J, J.x + w + 10, w) });
+    list.push({ g: 'r', team: null, op: 'fill', r: under(S, S.x, S.w) });
+    return list;
+  }
+
   // Hokey sahasının içi (yuvarlak köşeler dahil), dünya koordinatı
   function inRink(x, y, m = 0) {
     const hx = (x - HK.cx) / HK.S, hy = (y - HK.cy) / HK.S;
@@ -225,7 +244,7 @@
 
   return {
     W, H, CAMP_W, CAMP_H, SPAWN, FIELD, HAX, PADS, toWorld, VB, VFIELD, VPADS, vbToWorld,
-    HK, HFIELD, HPADS, hkToWorld, inRink,
+    HK, HFIELD, HPADS, hkToWorld, inRink, botPadList,
     LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOJI_PALETTE, DEFAULT_QUICK, CHAT_MAX, TREES,
     terrainAt, riverNearest, inEllipse, inRect, isWater,
   };

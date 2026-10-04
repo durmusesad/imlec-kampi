@@ -11,6 +11,7 @@ const { HMatch } = require('./public/hockey.js');
 const TRACK = require('./public/track.js');
 const RC = require('./public/racing.js');
 const SKINS = require('./public/skins.js');
+const BOTS = require('./bots.js');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC = path.join(__dirname, 'public');
@@ -247,7 +248,67 @@ function notice(p, text) {
 }
 
 function publicPlayer(p) {
-  return { id: p.id, name: p.name, color: p.color, skin: p.skin, x: p.x, y: p.y, afk: !!p.afk, typing: !!p.typing, admin: !!p.admin };
+  return { id: p.id, name: p.name, color: p.color, skin: p.skin, x: p.x, y: p.y, afk: !!p.afk, typing: !!p.typing, admin: !!p.admin, bot: !!p.bot };
+}
+
+// ---------- Botlar ----------
+// Sunucuda yaşayan sahte oyuncular: bağlantıları yoktur, girdilerini bots.js üretir.
+// Tek başına test için: her takım alanının altındaki "+ Bot / − Bot" kutularıyla eklenir.
+const BOT_PADS = WORLD.botPadList(TRACK);
+let botSeq = 0;
+function makeBot(at) {
+  const skin = SKINS.LIST[Math.floor(Math.random() * SKINS.LIST.length)].id;
+  const p = {
+    id: nextId++, ws: null, bot: true, token: null, x: at.x, y: at.y, team: null,
+    queue: [], ack: 0, ghostUntil: 0, rate: {}, name: `🤖 Bot ${++botSeq}`, skin, color: SKINS.labelColor(skin),
+  };
+  players.set(p.id, p);
+  scores[p.id] = 0;
+  broadcast({ t: 'join', p: publicPlayer(p) });
+  return p;
+}
+
+function botsIn(g, team) {
+  const key = { f: 'team', v: 'vteam', h: 'hteam' }[g];
+  return [...players.values()].filter((p) => p.bot && (g === 'r' ? p.racer : p[key] === team));
+}
+
+function addBot(me, g, team, at) {
+  if (g === 'r') {
+    if (race) return notice(me, 'Yarış sürüyor, bitince bot ekleyebilirsin.');
+    if (racerIds().length >= RC.MAX_CARS) return notice(me, `Start dolu (en fazla ${RC.MAX_CARS} araç).`);
+    setRacer(makeBot(at), true);
+    return;
+  }
+  const ids = g === 'f' ? teamIds(team) : g === 'v' ? vteamIds(team) : hteamIds(team);
+  const cfg = g === 'f' ? HAX : g === 'v' ? WORLD.VB : WORLD.HK;
+  if (ids.length >= cfg.teamMax) return notice(me, `${cfg.teams[team].name} takım dolu (en fazla ${cfg.teamMax} kişi).`);
+  const b = makeBot(at);
+  if (g === 'f') setTeam(b, team);
+  else if (g === 'v') setVTeam(b, team);
+  else setHTeam(b, team);
+}
+
+function removeBot(me, g, team) {
+  const list = botsIn(g, team);
+  if (!list.length) return notice(me, 'Burada kaldırılacak bot yok.');
+  removePlayer(list[list.length - 1]);
+}
+
+// Sitede gerçek oyuncu kalmayınca botlar da gider (kimsenin izlemediği maç sonsuza kadar sürmesin)
+// Maçta gerçek oyuncu vardı ve hepsi çıktıysa maç biter (sadece botları izlemek için başlatılan maç sürer)
+function stepOrAbandon(game) {
+  const human = [...game.players.keys()].some((id) => { const p = players.get(id); return p && !p.bot; });
+  if (human) game.hadHuman = true;
+  if (!game.hadHuman || human || game.phase === 'ended') return game.step();
+  const ev = [];
+  game.finish(ev, 'empty');
+  return ev;
+}
+
+function removeAllBotsIfAlone() {
+  if ([...players.values()].some((p) => !p.bot)) return;
+  for (const p of [...players.values()]) if (p.bot) removePlayer(p);
 }
 
 function clamp(v, a, b) {
@@ -460,9 +521,12 @@ function broadcastVMatch() {
 function stepVMatch(now) {
   for (const d of vmatch.players.values()) {
     const p = players.get(d.id);
-    if (p) pullInput(p, chan(p, 'v'), now, (k, e) => vmatch.setInput(d.id, k, e && e[2], e && e[3]));
+    if (p && p.bot) {
+      const o = BOTS.volley(vmatch, d);
+      vmatch.setInput(d.id, o.bits, o.ax, o.ay);
+    } else if (p) pullInput(p, chan(p, 'v'), now, (k, e) => vmatch.setInput(d.id, k, e && e[2], e && e[3]));
   }
-  for (const ev of vmatch.step()) {
+  for (const ev of stepOrAbandon(vmatch)) {
     if (ev.type === 'point') {
       if (ev.by != null && ev.reason === 'in' && scores[ev.by] != null) scores[ev.by]++;
       broadcast({ t: 'vpoint', team: ev.team, reason: ev.reason, by: ev.by, score: ev.score, scores });
@@ -552,9 +616,10 @@ function broadcastHMatch() {
 function stepHMatch(now) {
   for (const d of hmatch.players.values()) {
     const p = players.get(d.id);
-    if (p) pullInput(p, chan(p, 'h'), now, (k) => hmatch.setInput(d.id, k));
+    if (p && p.bot) hmatch.setInput(d.id, BOTS.hockey(hmatch, d));
+    else if (p) pullInput(p, chan(p, 'h'), now, (k) => hmatch.setInput(d.id, k));
   }
-  for (const ev of hmatch.step()) {
+  for (const ev of stepOrAbandon(hmatch)) {
     if (ev.type === 'goal') {
       if (ev.by != null && !ev.own && scores[ev.by] != null) scores[ev.by]++;
       broadcast({ t: 'hgoal', team: ev.team, by: ev.by, own: ev.own, score: ev.score, scores });
@@ -661,6 +726,7 @@ function broadcastFresh(msg, isNear, farEvery = 15) {
 function removePlayer(p) {
   players.delete(p.id);
   delete scores[p.id];
+  if (p.bot) BOTS.forget(p.id);
   if (match) match.removePlayer(p.id);
   if (vmatch) vmatch.removePlayer(p.id);
   if (hmatch) hmatch.removePlayer(p.id);
@@ -670,6 +736,7 @@ function removePlayer(p) {
   if (p.racer) broadcastLobby();
   broadcast({ t: 'leave', id: p.id });
   if (p.team) broadcastLobby();
+  if (!p.bot) removeAllBotsIfAlone();
 }
 
 // ---------- WebSocket ----------
@@ -710,7 +777,7 @@ wss.on('connection', (ws) => {
         for (const k of ['m', 'r', 'v', 'h']) chan(me, k).queue = [];
         me.afk = me.typing = false;
       } else {
-        if (players.size >= MAX_PLAYERS) {
+        if ([...players.values()].filter((p) => !p.bot).length >= MAX_PLAYERS) {
           send(ws, { t: 'full' });
           ws.close();
           return;
@@ -734,7 +801,7 @@ wss.on('connection', (ws) => {
         t: 'welcome',
         id: me.id,
         restored: !!restored,
-        players: [...players.values()].filter((p) => p.ws).map(publicPlayer),
+        players: [...players.values()].filter((p) => p.ws || p.bot).map(publicPlayer),
         scores,
         chat: chatLog,
         admin: me.admin,
@@ -812,6 +879,18 @@ wss.on('connection', (ws) => {
           } else if (!hteamIds('red').length || !hteamIds('blue').length) {
             notice(me, 'Başlatmak için her takımda en az 1 oyuncu olmalı.');
           } else startHMatch();
+        }
+        break;
+      }
+      case 'bot': {
+        const bp = Number.isInteger(m.i) ? BOT_PADS[m.i] : null;
+        if (!bp || !onPad(me, bp.r) || !allow(me, 'bot', 5, 1000)) return;
+        const at = { x: bp.r.x + bp.r.w / 2, y: bp.r.y + bp.r.h + 50 };
+        if (bp.op === 'add') addBot(me, bp.g, bp.team, at);
+        else if (bp.op === 'del') removeBot(me, bp.g, bp.team);
+        else if (bp.op === 'fill') {
+          if (race) return notice(me, 'Yarış sürüyor, bitince bot ekleyebilirsin.');
+          while (racerIds().length < RC.MAX_CARS) setRacer(makeBot(at), true);
         }
         break;
       }
@@ -1044,9 +1123,10 @@ let endAt = 0;
 function stepMatch(now) {
   for (const d of match.players.values()) {
     const p = players.get(d.id);
-    if (p) pullInput(p, chan(p, 'm'), now, (k) => match.setInput(d.id, k));
+    if (p && p.bot) match.setInput(d.id, BOTS.football(match, d));
+    else if (p) pullInput(p, chan(p, 'm'), now, (k) => match.setInput(d.id, k));
   }
-  const events = match.step();
+  const events = stepOrAbandon(match);
   for (const ev of events) {
     if (ev.type === 'goal') {
       if (ev.by != null && !ev.own && scores[ev.by] != null) scores[ev.by]++;
@@ -1064,7 +1144,8 @@ function stepMatch(now) {
 function stepRace(now) {
   for (const c of race.cars.values()) {
     const p = players.get(c.id);
-    if (p) pullInput(p, chan(p, 'r'), now, (k) => race.setInput(c.id, k));
+    if (p && p.bot) race.setInput(c.id, BOTS.race(race, c));
+    else if (p) pullInput(p, chan(p, 'r'), now, (k) => race.setInput(c.id, k));
   }
   const events = race.step();
   for (const ev of events) {
@@ -1128,7 +1209,7 @@ setInterval(() => {
 setInterval(() => {
   if (players.size === 0) return;
   const p = [];
-  for (const pl of players.values()) if (pl.ws) p.push([pl.id, Math.round(pl.x), Math.round(pl.y)]);
+  for (const pl of players.values()) if (pl.ws || pl.bot) p.push([pl.id, Math.round(pl.x), Math.round(pl.y)]);
   broadcastFresh({ t: 'state', p });
 }, 1000 / 30);
 
