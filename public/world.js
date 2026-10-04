@@ -129,6 +129,25 @@
     blue: { x: HK.cx + 190, y: HFIELD.y + HFIELD.h + 50, w: 200, h: 90 },
   };
 
+  // Tank oyunu (AZ Tank benzeri): buz pistinin altında labirent. Koordinatlar arena içinde piksel (sol üst 0,0)
+  const TK = {
+    x: 2500, y: 1260, cols: 15, rows: 8, cell: 120, wall: 8,
+    tankR: 15, speed: 2.1, backSpeed: 1.5, rot: 0.055, // px/tick, rad/tick
+    bulletR: 4, bulletSpeed: 4.2, range: 2520, // menzil: 2520 px / 4.2 px/tick = 600 tick = 10 sn
+    maxBullets: 5, grace: 24, // kendi merminin sahibine zarar vermeden alacağı yol (namludan çıkış)
+    mines: 2, plantSeconds: 3, mineR: 9, blast: 52,
+    mud: 0.45, mudRot: 0.65, // çamurda hız ve dönüş çarpanı
+    readySeconds: 1.2, overSeconds: 3, // tur başı bekleme, son kalan belli olduktan sonra bekleme
+    maxTanks: 8,
+  };
+  TK.w = TK.cols * TK.cell;
+  TK.h = TK.rows * TK.cell;
+  const TFIELD = { x: TK.x, y: TK.y, w: TK.w, h: TK.h };
+  const TPADS = {
+    join: { x: TK.x + TK.w / 2 - 250, y: TK.y + TK.h + 40, w: 220, h: 90 },
+    start: { x: TK.x + TK.w / 2 + 30, y: TK.y + TK.h + 40, w: 220, h: 90 },
+  };
+
   const LAKE = { cx: 2330, cy: 560, rx: 420, ry: 280, mult: 0.45 };
   const RIVER = {
     width: 110,
@@ -158,9 +177,9 @@
     [120, 140, 38], [260, 90, 30], [90, 420, 34], [220, 700, 40], [110, 980, 32],
     [300, 1180, 36], [140, 1330, 30], [1180, 1500, 34], [1320, 1720, 40], [1520, 1880, 30],
     [1720, 1580, 36], [1880, 1820, 32], [2860, 120, 36], [2800, 1080, 30],
-    [2920, 1840, 38], [1860, 980, 34], [1960, 1110, 30], [1250, 110, 32], [1030, 210, 28],
-    [620, 150, 34], [2600, 1900, 30], [2240, 1880, 34], [60, 1850, 36], [420, 1880, 30],
-    [1100, 1300, 28], [1740, 760, 30], [2380, 1400, 34], [2560, 1560, 30],
+    [1860, 980, 34], [1960, 1110, 30], [1250, 110, 32], [1030, 210, 28],
+    [620, 150, 34], [2240, 1880, 34], [60, 1850, 36], [420, 1880, 30],
+    [1100, 1300, 28], [1740, 760, 30], [2380, 1400, 34],
   ];
 
   function inEllipse(x, y, e) {
@@ -221,10 +240,12 @@
         list.push({ g, team, op: 'del', r: under(pad, pad.x + w + 10, w) });
       }
     }
-    const J = TRACK.PADS.join, S = TRACK.PADS.start, w = (J.w - 10) / 2;
-    list.push({ g: 'r', team: null, op: 'add', r: under(J, J.x, w) });
-    list.push({ g: 'r', team: null, op: 'del', r: under(J, J.x + w + 10, w) });
-    list.push({ g: 'r', team: null, op: 'fill', r: under(S, S.x, S.w) });
+    for (const [g, J, S] of [['r', TRACK.PADS.join, TRACK.PADS.start], ['t', TPADS.join, TPADS.start]]) {
+      const w = (J.w - 10) / 2;
+      list.push({ g, team: null, op: 'add', r: under(J, J.x, w) });
+      list.push({ g, team: null, op: 'del', r: under(J, J.x + w + 10, w) });
+      list.push({ g, team: null, op: 'fill', r: under(S, S.x, S.w) });
+    }
     return list;
   }
 
@@ -244,7 +265,7 @@
 
   return {
     W, H, CAMP_W, CAMP_H, SPAWN, FIELD, HAX, PADS, toWorld, VB, VFIELD, VPADS, vbToWorld,
-    HK, HFIELD, HPADS, hkToWorld, inRink, botPadList,
+    HK, HFIELD, HPADS, hkToWorld, inRink, botPadList, TK, TFIELD, TPADS,
     LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOJI_PALETTE, DEFAULT_QUICK, CHAT_MAX, TREES,
     terrainAt, riverNearest, inEllipse, inRect, isWater,
   };

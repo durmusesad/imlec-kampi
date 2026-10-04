@@ -208,6 +208,7 @@
   body:not(.in-race) #keys .sec-race { display: none; }
   body:not(.in-vb) #keys .sec-volley, body.in-vb #keys .sec-lobby { display: none; }
   body:not(.in-hk) #keys .sec-hockey, body.in-hk #keys .sec-lobby { display: none; }
+  body:not(.in-tank) #keys .sec-tank, body.in-tank #keys .sec-lobby { display: none; }
   body.paused #keys .sec-volley { display: block; }
   body.paused #keys {
     opacity: 1; left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%); padding: 18px 22px 16px;
@@ -242,6 +243,21 @@
     font: 700 18px Arial, sans-serif; box-shadow: 3px 3px 0 var(--ink); white-space: nowrap;
   }
   body.both-scores #vscore { top: 62px; }
+
+  /* Tank skor tablosu */
+  #tscore {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 4px;
+    background: #3a2e22; color: #fff; border: 2px solid var(--ink); border-radius: 10px; padding: 5px 12px;
+    font: 700 15px Arial, sans-serif; box-shadow: 3px 3px 0 var(--ink); max-width: 92vw;
+  }
+  #tscore .trow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  #tscore #tRound { font-size: 12px; opacity: .75; }
+  #tscore #tList { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  #tscore .tp { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border-radius: 6px; background: rgba(255,255,255,.08); white-space: nowrap; }
+  #tscore .tp i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; border: 1.5px solid #000; }
+  #tscore .tp.me { outline: 2px solid #ffd23f; }
+  #tscore .tp.dead { opacity: .4; text-decoration: line-through; }
+  #tscore #tAmmo { font-size: 14px; letter-spacing: 2px; color: #ffd98a; white-space: pre; }
 
   /* Hokey skor tablosu */
   #hscore {
@@ -337,6 +353,14 @@
     <span class="k"><kbd>1</kbd><span class="or">–</span><kbd>8</kbd></span><span class="lbl">Hızlı emoji</span>
     <span class="k"><kbd>L</kbd></span><span class="lbl">Maçtan çık</span>
   </div></section>
+  <section class="sec-tank"><h5>Tank</h5><div class="grid">
+    <span class="k"><kbd>W</kbd><span class="or">/</span><kbd>S</kbd></span><span class="lbl">İleri / geri</span>
+    <span class="k"><kbd>A</kbd><span class="or">/</span><kbd>D</kbd></span><span class="lbl">Sola / sağa dön (olduğu yerde de)</span>
+    <span class="k"><kbd class="wide">Space</kbd></span><span class="lbl">Ateş (en fazla 5 mermi, duvardan seker)</span>
+    <span class="k"><kbd>F</kbd></span><span class="lbl">Mayın bırak (3 sn kıpırdayamazsın, turda 2)</span>
+    <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
+    <span class="k"><kbd>L</kbd></span><span class="lbl">Oyundan çık</span>
+  </div></section>
   <section class="sec-hockey"><h5>Buz Hokeyi</h5><div class="grid">
     <span class="k"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span class="lbl">Paten (oklar da olur) · buzda kayarsın</span>
     <span class="k"><kbd class="wide">Space</kbd></span><span class="lbl">Şut (paka değerken)</span>
@@ -371,6 +395,7 @@
 <div id="raceResults" class="hidden"><div class="card"><h1 id="rrTitle">🏁 Yarış sonuçları</h1><p id="rrSub"></p><div id="rrList"></div></div></div>
 <div id="toast"></div>
 <div id="vscore" class="hidden"><span class="vt">🏐</span><span class="team red" id="vRed">0</span><span class="sep">:</span><span class="team blue" id="vBlue">0</span><span id="vInfo"></span></div>
+<div id="tscore" class="hidden"><div class="trow"><span id="tRound">Tur 1</span><span id="tList"></span></div><div id="tAmmo" class="hidden"></div></div>
 <div id="hscore" class="hidden"><span id="hPer">1. Periyot</span><span class="team red" id="hRed">0</span><span id="hTime">01:30</span><span class="team blue" id="hBlue">0</span></div>
 <div id="score" class="hidden"><span id="sHalf">1. Devre</span><span class="team red" id="sRed">0</span><span id="sTime">01:00</span><span class="team blue" id="sBlue">0</span><span id="sMsg" class="hidden"></span></div>
 
@@ -431,6 +456,7 @@
 <script src="racing.js"></script>
 <script src="volleyball.js"></script>
 <script src="hockey.js"></script>
+<script src="tank.js"></script>
 <script src="trackdraw.js"></script>
 <script src="game.js"></script>
 </body>

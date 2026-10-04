@@ -236,7 +236,7 @@
       pickRadial();
       return;
     }
-    if (inMatch() || inRace() || inHk()) return;
+    if (inMatch() || inRace() || inHk() || inTank()) return;
     // Sol tık sadece etkileşimli alanlarda bir şey yapar (boş yere tıklamak hiçbir şey göndermez)
     for (let i = 0; i < BOT_PADS.length; i++) {
       if (W.inRect(me.x, me.y, BOT_PADS[i].r)) {
@@ -273,6 +273,13 @@
         return;
       }
     }
+    for (const [name, pad] of Object.entries(W.TPADS)) {
+      if (W.inRect(me.x, me.y, pad)) {
+        SFX.click();
+        send({ t: 'tpad', pad: name });
+        return;
+      }
+    }
   });
   document.addEventListener('mouseup', (e) => {
     if (e.button === 0) mouseBits &= ~16;
@@ -293,6 +300,7 @@
   const KEYMAP = {
     KeyW: 1, ArrowUp: 1, KeyS: 2, ArrowDown: 2, KeyA: 4, ArrowLeft: 4, KeyD: 8, ArrowRight: 8, Space: 16, KeyX: 16,
     ShiftLeft: 64, ShiftRight: 64, // voleybolda balıklama
+    KeyF: 128, // tankta mayın
   };
   function inMatch() {
     return lobby.running && myId != null && (lobby.red.includes(myId) || lobby.blue.includes(myId));
@@ -322,6 +330,11 @@
       pending.push([seq, 0]);
       send({ t: 'i', s: seq, k: 0 });
     }
+    if (inTank() && tsim) {
+      tseq++;
+      tpending.push([tseq, 0]);
+      send({ t: 'ti', s: tseq, k: 0 });
+    }
     if (inHk() && hsim) {
       hseq++;
       hpending.push([hseq, 0]);
@@ -341,7 +354,7 @@
 
   document.addEventListener('keydown', (e) => {
     if (!joined || chatting || !locked) return; // normal modda tuşlar siteye gitmez
-    const playing = inMatch() || inRace() || inVb() || inHk();
+    const playing = inMatch() || inRace() || inVb() || inHk() || inTank();
     if (KEYMAP[e.code] && playing) {
       e.preventDefault();
       keys.add(e.code);
@@ -358,7 +371,7 @@
         openChat();
         return;
       case 'KeyL':
-        if (myTeam() || myVTeam() || myHTeam() || (lobby.racers || []).includes(myId)) send({ t: 'leave' });
+        if (myTeam() || myVTeam() || myHTeam() || (lobby.tankers || []).includes(myId) || (lobby.racers || []).includes(myId)) send({ t: 'leave' });
         return;
       case 'KeyE':
         openEmojiPanel();
@@ -590,18 +603,20 @@
         }
         break;
       case 'lobby': {
-        const wasIn = inMatch(), wasRace = inRace(), wasVb = inVb(), wasHk = inHk();
+        const wasIn = inMatch(), wasRace = inRace(), wasVb = inVb(), wasHk = inHk(), wasTk = inTank();
         lobby = m;
         document.body.classList.toggle('in-match', inMatch());
         document.body.classList.toggle('in-race', inRace());
         document.body.classList.toggle('in-vb', inVb());
         document.body.classList.toggle('in-hk', inHk());
+        document.body.classList.toggle('in-tank', inTank());
         if (!m.running) resetMatchView();
         if (!m.raceRunning) resetRaceView();
         if (!m.vRunning) resetVView();
         if (!m.hRunning) resetHView();
+        if (!m.tRunning) resetTView();
         if (!wasVb && inVb()) resetAim();
-        if (wasIn !== inMatch() || wasRace !== inRace() || wasVb !== inVb() || wasHk !== inHk()) {
+        if (wasIn !== inMatch() || wasRace !== inRace() || wasVb !== inVb() || wasHk !== inHk() || wasTk !== inTank()) {
           flashKeys(); // maça/yarışa girince/çıkınca ilgili tuşları kısaca göster
           keys.clear(); // sadece kendi durumum değişince; başkası takım değiştirince tuşlarım bırakılmasın
         }
@@ -633,6 +648,33 @@
         lastSnapAt = now;
         onHSnapshot(m);
         break;
+      case 'tg':
+        lastSnapAt = now;
+        onTSnapshot(m);
+        break;
+      case 'tkill':
+        explode(W.TK.x + m.x, W.TK.y + m.y, m.how === 'mine');
+        if (m.id === myId) toast(m.by === myId ? (m.how === 'mine' ? '💥 Kendi mayınına bastın' : '💥 Kendi merminle vuruldun') : `💥 ${(players.get(m.by) || {}).name || 'Biri'} seni vurdu`);
+        break;
+      case 'tboom':
+        explode(W.TK.x + m.x, W.TK.y + m.y, true);
+        break;
+      case 'tround': {
+        scores = m.scores || scores;
+        renderPlayerList();
+        if (!(inTank() || nearArena())) break;
+        const p = m.winner != null ? players.get(m.winner) : null;
+        if (p) announce(`${p.name} turu kazandı!`, p.color, '+1 puan');
+        else announce('Kimse kalmadı', '#fff', 'Bu tur puan yok');
+        if (m.winner === myId) SFX.goal();
+        break;
+      }
+      case 'tend': {
+        if (!(inTank() || nearArena())) break;
+        const top = m.standings && m.standings[0];
+        announce('Tank maçı bitti', '#fff', top ? `Lider: ${top.name} (${top.s})` : '');
+        break;
+      }
       case 'hgoal': {
         scores = m.scores || scores;
         renderPlayerList();
@@ -2239,9 +2281,422 @@
     $('hscore').classList.toggle('hidden', !g);
   }
 
+  // ---------- Tank (AZ Tank benzeri) ----------
+  // Futbol/hokey ile aynı tahmin sistemi; mayınlar sunucudan sadece sahibine gelir
+  const TA = window.TANKS, TK = W.TK;
+  let tsim = null, tmeta = null, tacc = 0, tseq = 0, tpending = [], tprev = new Map();
+  const toffsets = new Map();
+  let tDelay = 2;
+  const booms = []; // patlama parçacıkları (yerel görsel efekt)
+
+  function inTank() {
+    return !!lobby.tRunning && myId != null && (lobby.tankers || []).includes(myId);
+  }
+  function nearArena() {
+    const F = W.TFIELD, m = 200;
+    return cam.x + wvw > F.x - m && cam.x < F.x + F.w + m && cam.y + wvh > F.y - m && cam.y < F.y + F.h + m;
+  }
+  function resetTView() {
+    tsim = null;
+    tmeta = null;
+    tpending = [];
+    toffsets.clear();
+    tprev = new Map();
+    tacc = 0;
+  }
+  function tPositions() {
+    const m = new Map();
+    for (const t of tsim.players.values()) m.set(t.id, { x: t.x, y: t.y, a: t.a });
+    for (const b of tsim.bullets) m.set('b' + b.id, { x: b.x, y: b.y, a: 0 });
+    return m;
+  }
+  function tStep(bits) {
+    tprev = tPositions();
+    if (bits != null) tsim.setInput(myId, bits);
+    return tsim.step(true);
+  }
+  const angLerp = (a, b, k) => {
+    let d = b - a;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return a + d * k;
+  };
+  function tRender(alpha, noOffset) {
+    const out = new Map();
+    if (!tsim) return out;
+    for (const [id, c] of tPositions()) {
+      const p = tprev.get(id) || c;
+      const o = noOffset ? null : toffsets.get(id);
+      // Sekme anında ara konum duvarın içine düşmesin: büyük yön değişiminde doğrudan güncel konum
+      const jump = Math.hypot(c.x - p.x, c.y - p.y) > 30;
+      out.set(id, {
+        x: (jump ? c.x : p.x + (c.x - p.x) * alpha) + (o ? o.x : 0),
+        y: (jump ? c.y : p.y + (c.y - p.y) * alpha) + (o ? o.y : 0),
+        a: angLerp(p.a, c.a, alpha),
+      });
+    }
+    return out;
+  }
+  function onTSnapshot(g) {
+    tmeta = g;
+    if (!lobby.tRunning) return;
+    if (!tsim) {
+      tsim = new TA.TMatch(g.seed);
+      tsim.load(g, myId);
+      tpending = [];
+      tprev = tPositions();
+      return;
+    }
+    const alpha = Math.min(1, tacc / TICK);
+    const before = tRender(alpha, true);
+    const oldRound = tsim.round;
+    tsim.load(g, myId);
+    const mine = g.tk.find((q) => q[0] === myId);
+    if (mine && g.rd === oldRound) {
+      const ack = mine[9];
+      const want = Math.max(2, Math.min(3, mine[10] || 2));
+      if (want > tDelay) tDelay++;
+      else if (want < tDelay) tDelay--;
+      tpending = tpending.filter(([s]) => s > ack);
+      if (tpending.length > 90) tpending = tpending.slice(-90);
+      const upto = Math.max(0, tpending.length - tDelay);
+      for (let i = 0; i < upto; i++) tStep(tpending[i][1]);
+      if (!upto) tprev = tPositions();
+    } else {
+      tpending = [];
+      tprev = tPositions();
+    }
+    const after = tRender(alpha, true);
+    for (const [id, a] of after) {
+      const b = before.get(id);
+      if (!b || typeof id === 'string') continue; // mermiler düzeltmesiz (sekmede yanlış yöne kaymasın)
+      const o = toffsets.get(id) || { x: 0, y: 0 };
+      o.x += b.x - a.x;
+      o.y += b.y - a.y;
+      if (Math.hypot(o.x, o.y) > 40) { o.x = 0; o.y = 0; }
+      toffsets.set(id, o);
+    }
+  }
+  let lastRic = 0;
+  function advanceT(dt) {
+    if (!tsim) return;
+    const playing = inTank() && tsim.players.has(myId);
+    tacc += dt;
+    let steps = 0;
+    while (tacc >= TICK && steps < 6) {
+      tacc -= TICK;
+      steps++;
+      let ev;
+      if (playing) {
+        const k = inputBits();
+        tseq++;
+        tpending.push([tseq, k]);
+        send({ t: 'ti', s: tseq, k });
+        ev = tStep(tpending.length > tDelay ? tpending[tpending.length - 1 - tDelay][1] : null);
+      } else ev = tStep(null);
+      // Sesler (tahmin adımlarından)
+      for (const e of ev) {
+        if (e.type === 'fire') {
+          const t = tsim.players.get(e.id), sp = t && spatial(TK.x + t.x, TK.y + t.y, 1.4);
+          if (sp) SFX.tankFire(e.id === myId ? 1 : sp.vol, sp.pan);
+        } else if (e.type === 'bounce') {
+          const now = performance.now();
+          if (now - lastRic < 60) continue;
+          const sp = spatial(TK.x + e.x, TK.y + e.y, 1.4);
+          if (sp) { lastRic = now; SFX.ricochet(sp.vol, sp.pan); }
+        } else if (e.type === 'mine' && e.id === myId) SFX.minePlant();
+      }
+    }
+    if (steps === 6) tacc = 0;
+    const decay = Math.exp(-dt * 14);
+    for (const o of toffsets.values()) { o.x *= decay; o.y *= decay; }
+  }
+
+  // Patlama: kıvılcım + duman parçacıkları
+  function explode(x, y, big) {
+    const n = big ? 46 : 30;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2, s = (big ? 1.5 : 1) * (0.6 + Math.random() * 3.2);
+      booms.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0, max: 30 + Math.random() * 35,
+        r: 3 + Math.random() * (big ? 9 : 6), smoke: Math.random() < 0.45 });
+    }
+    const sp = spatial(x, y, 1.6);
+    if (sp) SFX.boom(sp.vol, sp.pan);
+  }
+  function drawBooms(dt) {
+    const f = dt * 60;
+    for (let i = booms.length - 1; i >= 0; i--) {
+      const p = booms[i];
+      p.life += f;
+      if (p.life >= p.max) { booms.splice(i, 1); continue; }
+      p.x += p.vx * f;
+      p.y += p.vy * f;
+      p.vx *= Math.pow(0.92, f);
+      p.vy *= Math.pow(0.92, f);
+      const k = 1 - p.life / p.max;
+      ctx.globalAlpha = k;
+      ctx.fillStyle = p.smoke ? '#5a5048' : k > 0.6 ? '#ffe28a' : k > 0.3 ? '#ff9a3c' : '#d9481c';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r * (p.smoke ? 1.6 - k * 0.6 : 0.5 + k * 0.5), 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Labirent + çamur (tur başına bir kez çizilir)
+  let arenaCache = null;
+  function arenaCanvas(map) {
+    if (arenaCache && arenaCache.seed === map.seed) return arenaCache.cv;
+    const pad = 20, cv = document.createElement('canvas');
+    cv.width = TK.w + pad * 2;
+    cv.height = TK.h + pad * 2;
+    const c = cv.getContext('2d');
+    c.translate(pad, pad);
+    // Hafif koyu kum: arena sınırı belli olsun
+    c.fillStyle = 'rgba(160,120,60,0.10)';
+    c.fillRect(0, 0, TK.w, TK.h);
+    // Çamur (kamptaki çamurla aynı renkler)
+    for (const m of map.mud) {
+      const r = TA.rng(m.seed);
+      c.fillStyle = '#8a6a4a';
+      c.beginPath();
+      c.ellipse(m.cx, m.cy, m.rx + 6, m.ry + 6, 0, 0, Math.PI * 2);
+      c.fill();
+      c.fillStyle = '#7a5b3d';
+      c.beginPath();
+      c.ellipse(m.cx, m.cy, m.rx, m.ry, 0, 0, Math.PI * 2);
+      c.fill();
+      for (let i = 0; i < 14; i++) {
+        const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 0.85;
+        c.fillStyle = r() < 0.5 ? '#6a4c30' : '#94734f';
+        c.beginPath();
+        c.ellipse(m.cx + Math.cos(a) * m.rx * d, m.cy + Math.sin(a) * m.ry * d, 5 + r() * 12, 3 + r() * 7, r() * 3, 0, Math.PI * 2);
+        c.fill();
+      }
+    }
+    // Duvarlar: gölge, gövde, üst ışık
+    c.fillStyle = 'rgba(59,47,36,0.35)';
+    for (const w of map.walls) c.fillRect(w.x + 3, w.y + 4, w.w, w.h);
+    c.fillStyle = INK;
+    for (const w of map.walls) c.fillRect(w.x - 1.5, w.y - 1.5, w.w + 3, w.h + 3);
+    c.fillStyle = '#6b5440';
+    for (const w of map.walls) c.fillRect(w.x, w.y, w.w, w.h);
+    c.fillStyle = 'rgba(255,255,255,0.18)';
+    for (const w of map.walls) c.fillRect(w.x, w.y, w.w, Math.min(2.5, w.h));
+    arenaCache = { seed: map.seed, cv };
+    return cv;
+  }
+  const demoMap = TA.buildMap(20261004); // maç yokken alanda görünen labirent
+
+  function drawTPads() {
+    const P = W.TPADS;
+    if (!inView(P.join.x + 250, P.join.y, 500)) return;
+    const hover = joined && !inMatch() && !inRace() && !inVb() && !inHk() && !inTank() ? me : null;
+    const ids = lobby.tankers || [], running = !!lobby.tRunning;
+    const names = ids.map((id) => (players.get(id) || {}).name).filter(Boolean);
+    padBox(P.join, '#7b5e3b', (ids.includes(myId) ? '✓ ' : '') + '🪖 Tanka Katıl', names.length ? names : ['(boş — tıkla, katıl)'],
+      hover && W.inRect(hover.x, hover.y, P.join));
+    let lines;
+    if (running) lines = [isAdmin ? 'Yönetici olarak bitir' : 'Sadece yönetici bitirebilir'];
+    else if (ids.length < 2) lines = ['En az 2 tank (bot da olur)', `${ids.length} tank hazır`];
+    else lines = [`${ids.length} tank hazır · süre yok`];
+    if (!running && lobby.tLast && lobby.tLast.length) lines.push(`Son: ${lobby.tLast[0].name} ${lobby.tLast[0].s}`);
+    padBox(P.start, running ? '#8a8a8a' : '#f0a93b', !running ? '▶ Tankı Başlat' : isAdmin ? '⏹ Maçı Bitir' : '🪖 Maç sürüyor', lines,
+      hover && W.inRect(hover.x, hover.y, P.start));
+    ctx.fillStyle = 'rgba(59,47,36,0.75)';
+    ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('🪖 Tank · W/S git · A/D dön · Space ateş (5 mermi, duvardan seker) · F mayın (3 sn bekle)', TK.x + TK.w / 2, P.join.y + P.join.h + 58);
+  }
+
+  function shade(hex, k) {
+    const n = parseInt(hex.slice(1), 16);
+    const f = (v) => Math.max(0, Math.min(255, Math.round(v * k)));
+    return `rgb(${f(n >> 16)},${f((n >> 8) & 255)},${f(n & 255)})`;
+  }
+  function drawTank(t, d, time) {
+    const pl = players.get(t.id);
+    const col = pl && /^#[0-9a-f]{6}$/i.test(pl.color) ? pl.color : '#7a8f5a';
+    const x = TK.x + d.x, y = TK.y + d.y;
+    ctx.save();
+    ctx.translate(x, y);
+    if (!t.alive) {
+      // Enkaz
+      ctx.rotate(d.a);
+      ctx.fillStyle = '#3a3530';
+      roundRect(ctx, -14, -11, 28, 22, 4);
+      ctx.fill();
+      ctx.fillStyle = '#1e1b18';
+      ctx.beginPath();
+      ctx.arc(0, 0, 6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = `rgba(80,72,64,${0.25 + 0.15 * Math.sin(time / 300 + t.id)})`;
+      ctx.beginPath();
+      ctx.arc(x + 4 * Math.sin(time / 500 + t.id), y - 14 - ((time / 40 + t.id * 7) % 16), 7, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+    ctx.rotate(d.a);
+    // Paletler
+    ctx.fillStyle = '#2b2622';
+    roundRect(ctx, -15, -13, 30, 7, 2);
+    ctx.fill();
+    roundRect(ctx, -15, 6, 30, 7, 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth = 1;
+    const off = ((d.x + d.y) * 0.6) % 5;
+    for (let i = -15 + off; i < 15; i += 5) {
+      ctx.beginPath(); ctx.moveTo(i, -13); ctx.lineTo(i, -6); ctx.moveTo(i, 6); ctx.lineTo(i, 13); ctx.stroke();
+    }
+    // Gövde
+    ctx.fillStyle = col;
+    roundRect(ctx, -12, -9, 24, 18, 4);
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Namlu ve kule
+    ctx.fillStyle = '#3b3530';
+    ctx.fillRect(2, -2.5, 19, 5);
+    ctx.strokeRect(2, -2.5, 19, 5);
+    ctx.fillStyle = shade(col, 0.78);
+    ctx.beginPath();
+    ctx.arc(0, 0, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+    // Mayın kuruluyor: ilerleme halkası
+    if (t.plant > 0) {
+      const k = 1 - t.plant / (TK.plantSeconds * TA.TPS);
+      ctx.strokeStyle = '#ffd23f';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(x, y, 22, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
+      ctx.stroke();
+    }
+    if (t.id === myId) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x, y, 25, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (pl) {
+      ctx.font = 'bold 12px Nunito, Trebuchet MS, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillStyle = '#fff';
+      const nm = (pl.admin ? '👑 ' : '') + pl.name;
+      ctx.strokeText(nm, x, y - 26);
+      ctx.fillText(nm, x, y - 26);
+      ctx.save();
+      ctx.translate(x - 6, y - 40);
+      drawSocial(pl, time);
+      ctx.restore();
+    }
+  }
+
+  function drawTankGame(time, tp, dt) {
+    if (!inView(TK.x + TK.w / 2, TK.y + TK.h / 2, 1400)) return;
+    const map = tsim ? tsim.map : demoMap;
+    ctx.drawImage(arenaCanvas(map), TK.x - 20, TK.y - 20);
+    drawTPads();
+    if (tsim && tp) {
+      // Kendi mayınlarım (sadece ben görürüm)
+      for (const m of tsim.mines) {
+        const x = TK.x + m.x, y = TK.y + m.y;
+        ctx.globalAlpha = m.armed ? 0.9 : 0.5;
+        ctx.fillStyle = '#4a4a4a';
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x, y, TK.mineR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = Math.floor(time / 400) % 2 ? '#ff3b30' : '#7a1a14';
+        ctx.beginPath();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
+      for (const t of tsim.players.values()) if (!t.alive && t.x >= 0) drawTank(t, tp.get(t.id) || t, time);
+      for (const t of tsim.players.values()) if (t.alive) drawTank(t, tp.get(t.id) || t, time);
+      ctx.fillStyle = '#1b1b1b';
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)';
+      ctx.lineWidth = 1;
+      for (const b of tsim.bullets) {
+        const d = tp.get('b' + b.id) || b;
+        ctx.beginPath();
+        ctx.arc(TK.x + d.x, TK.y + d.y, TK.bulletR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+    drawBooms(dt);
+  }
+
+  let lastTPhase = null;
+  function drawTOverlay() {
+    const g = lobby.tRunning && tmeta && (inTank() || nearArena()) ? tmeta : null;
+    if (!g) { lastTPhase = null; return; }
+    if (g.ph === 'ready') {
+      ctx.save();
+      ctx.font = '900 64px Nunito, Trebuchet MS, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = INK;
+      ctx.fillStyle = '#fff';
+      ctx.strokeText(`Tur ${g.rd}`, vw / 2, vh * 0.42);
+      ctx.fillText(`Tur ${g.rd}`, vw / 2, vh * 0.42);
+      ctx.restore();
+      if (lastTPhase !== 'ready') SFX.beep();
+    }
+    lastTPhase = g.ph;
+  }
+
+  let tHudKey = '';
+  function updateTHud() {
+    const g = lobby.tRunning && tsim && (inTank() || nearArena()) ? tsim : null;
+    let key = 'off';
+    if (g) {
+      const me_ = g.players.get(myId);
+      const ammo = me_ ? TK.maxBullets - g.bullets.filter((b) => b.owner === myId).length : 0;
+      const list = [...g.players.keys()].map((id) => [id, g.score.get(id) || 0]).sort((a, b) => b[1] - a[1]);
+      key = [g.round, ammo, me_ ? me_.minesLeft : -1, me_ ? me_.alive : 0, list.map((x) => x.join(':')).join(','),
+        list.map(([id]) => (g.players.get(id).alive ? 1 : 0)).join('')].join('|');
+      if (key !== tHudKey) {
+        $('tRound').textContent = `Tur ${g.round}`;
+        const box = $('tList');
+        box.innerHTML = '';
+        for (const [id, sc] of list) {
+          const p = players.get(id), t = g.players.get(id);
+          const el = document.createElement('span');
+          el.className = 'tp' + (t.alive ? '' : ' dead') + (id === myId ? ' me' : '');
+          const dot = document.createElement('i');
+          dot.style.background = p ? p.color : '#888';
+          el.append(dot, document.createTextNode(`${p ? p.name : '?'} ${sc}`));
+          box.appendChild(el);
+        }
+        $('tAmmo').classList.toggle('hidden', !me_);
+        if (me_) {
+          $('tAmmo').textContent = '●'.repeat(ammo) + '○'.repeat(TK.maxBullets - ammo) + '   ' + '💣'.repeat(me_.minesLeft) + (me_.minesLeft ? '' : '—');
+        }
+      }
+    }
+    if (key === tHudKey) return;
+    tHudKey = key;
+    $('tscore').classList.toggle('hidden', !g);
+  }
+
   // Bot kutuları: takım alanlarının altında küçük düğmeler
   function drawBotPads() {
-    const hover = joined && !inMatch() && !inRace() && !inVb() && !inHk() ? me : null;
+    const hover = joined && !inMatch() && !inRace() && !inVb() && !inHk() && !inTank() ? me : null;
     const teams = { f: H.teams, v: W.VB.teams, h: W.HK.teams };
     ctx.save();
     ctx.textAlign = 'center';
@@ -2251,7 +2706,7 @@
       const r = bp.r;
       if (!inView(r.x + r.w / 2, r.y, 200)) continue;
       const over = hover && W.inRect(hover.x, hover.y, r);
-      const base = bp.team ? teams[bp.g][bp.team].color : '#2e7d32';
+      const base = bp.team ? teams[bp.g][bp.team].color : bp.g === 't' ? '#7b5e3b' : '#2e7d32';
       ctx.fillStyle = INK;
       roundRect(ctx, r.x + 3, r.y + 4, r.w, r.h, 10);
       ctx.fill();
@@ -2267,7 +2722,7 @@
         ctx.fill();
       }
       ctx.fillStyle = over ? INK : '#fff';
-      const label = bp.op === 'add' ? '+ 🤖 Bot' : bp.op === 'del' ? '− 🤖 Bot' : '🤖 Startı botlarla doldur';
+      const label = bp.op === 'add' ? '+ 🤖 Bot' : bp.op === 'del' ? '− 🤖 Bot' : bp.g === 't' ? `🤖 ${W.TK.maxTanks} tanka doldur` : '🤖 Startı botlarla doldur';
       ctx.fillText(label, r.x + r.w / 2, r.y + r.h / 2 + 1);
     }
     ctx.restore();
@@ -2282,7 +2737,7 @@
     if (!joined) return;
     const now = performance.now();
     // Maçta/yarışta 0.4 sn'den uzun durum gelmezse ya da ping cevabı 5 sn gecikirse bağlantı zayıf
-    const playing = (inMatch() && sim) || (inRace() && rsim) || (inVb() && vsim) || (inHk() && hsim);
+    const playing = (inMatch() && sim) || (inRace() && rsim) || (inVb() && vsim) || (inHk() && hsim) || (inTank() && tsim);
     const weak = !connected || (playing && now - lastSnapAt > 400) || (lastPongAt && now - lastPongAt > 5000);
     const ms = rttMs == null ? null : Math.round(rttMs);
     const cls = weak ? 'bad weak' : ms == null ? '' : ms < 80 ? 'good' : ms < 150 ? 'ok' : 'bad';
@@ -2483,6 +2938,7 @@
       get rp() { return lastRp; },
       get rr() { return lastRr; }, get rsim() { return rsim; }, get rpending() { return rpending; },
       get hsim() { return hsim; }, get hpending() { return hpending; },
+      get tsim() { return tsim; },
       get vsim() { return vsim; }, get vpending() { return vpending; }, aim, setMouse: (b) => { mouseBits = b; }, get bits() { return inputBits(); },
       startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
       get stats() { return corrStats; },
@@ -2580,7 +3036,7 @@
       return;
     }
     // --- Arazi: su, çamur, buz ---
-    const onFoot = !inMatch() && !inRace() && !inVb() && !inHk();
+    const onFoot = !inMatch() && !inRace() && !inVb() && !inHk() && !inTank();
     const kind = onFoot ? W.terrainAt(me.x, me.y).kind : null;
     const moved = aPrev ? Math.hypot(me.x - aPrev.x, me.y - aPrev.y) : 0;
     aPrev = { x: me.x, y: me.y };
@@ -2689,7 +3145,8 @@
     // Maç sürerken seyirciler sahaya giremez: en yakın kenara itilir
     const fence = lobby.running && W.inRect(me.x, me.y, W.FIELD) ? W.FIELD
       : lobby.vRunning && W.inRect(me.x, me.y, W.VFIELD) ? W.VFIELD
-      : lobby.hRunning && W.inRect(me.x, me.y, W.HFIELD) ? W.HFIELD : null;
+      : lobby.hRunning && W.inRect(me.x, me.y, W.HFIELD) ? W.HFIELD
+      : lobby.tRunning && W.inRect(me.x, me.y, W.TFIELD) ? W.TFIELD : null;
     if (fence) {
       const F = fence, m = 2;
       const d = [me.x - F.x, F.x + F.w - me.x, me.y - F.y, F.y + F.h - me.y];
@@ -2941,6 +3398,11 @@
     c.strokeStyle = '#fff';
     c.lineWidth = 14;
     c.strokeRect(W.VB.cx - W.VB.courtX * W.VB.S, W.VB.cy - W.VB.courtY * W.VB.S, W.VB.courtX * 2 * W.VB.S, W.VB.courtY * 2 * W.VB.S);
+    c.fillStyle = '#b39a76';
+    c.fillRect(W.TFIELD.x, W.TFIELD.y, W.TFIELD.w, W.TFIELD.h);
+    c.strokeStyle = '#6b5440';
+    c.lineWidth = 12;
+    c.strokeRect(W.TFIELD.x, W.TFIELD.y, W.TFIELD.w, W.TFIELD.h);
     c.fillStyle = '#d4eefa';
     roundRect(c, W.HFIELD.x, W.HFIELD.y, W.HFIELD.w, W.HFIELD.h, W.HK.cornerR * W.HK.S);
     c.fill();
@@ -3517,6 +3979,7 @@
     advanceRace(dt);
     advanceV(dt);
     advanceH(dt);
+    advanceT(dt);
     vHitSound();
     const rp = sim ? renderPositions(Math.min(1, simAcc / TICK)) : null;
     lastRp = rp;
@@ -3528,6 +3991,8 @@
     const myV = inVb() && vp ? vp.get(myId) : null;
     const hp = hsim ? hRender(Math.min(1, hacc / TICK)) : null;
     const myH = inHk() && hp ? hp.get(myId) : null;
+    const tp = tsim ? tRender(Math.min(1, tacc / TICK)) : null;
+    const myT = inTank() && tp ? tp.get(myId) : null;
     camLead.x *= 0.9;
     camLead.y *= 0.9;
     if (myDisc) {
@@ -3566,9 +4031,19 @@
         camLead.x = q.vx * HK.S * 25;
         camLead.y = q.vy * HK.S * 25;
       }
+    } else if (inTank()) {
+      // Tankta bütün labirent görünsün: kamera arenanın ortasına bakar
+      if (myT && myT.x >= 0) {
+        me.x = TK.x + myT.x;
+        me.y = TK.y + myT.y;
+      }
+      me.vx = me.vy = 0;
+      inAx = inAy = 0;
+      camLead.x = TK.x + TK.w / 2 - me.x;
+      camLead.y = TK.y + TK.h / 2 - me.y;
     } else if (joined && !inMatch() && !inRace() && !inVb() && !inHk()) stepMovement(dt);
     // Yakınlaştırma yumuşak geçer; görünen alan değişirken kamera merkezi sabit kalsın
-    const targetZoom = myCar ? RACE_ZOOM : 1;
+    const targetZoom = myCar ? RACE_ZOOM : inTank() ? Math.min(1, (vw - 360) / TK.w, (vh - 150) / TK.h) : 1; // kenar paneller labirenti örtmesin
     if (Math.abs(targetZoom - zoom) > 0.001) {
       const cx = cam.x + wvw / 2, cy = cam.y + wvh / 2;
       zoom += (targetZoom - zoom) * (1 - Math.exp(-dt * 4));
@@ -3599,17 +4074,18 @@
     drawRace(time, rr);
     drawVolley(time, vp);
     drawHockey(time, hp);
+    drawTankGame(time, tp, dt);
     drawBotPads();
 
     const rt = time - INTERP_DELAY;
     for (const p of players.values()) {
       if (p.id === myId) continue;
       p.render = interp(p.snaps, rt);
-      if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && !(vsim && vsim.players.has(p.id)) && !(hsim && hsim.players.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
+      if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && !(vsim && vsim.players.has(p.id)) && !(hsim && hsim.players.has(p.id)) && !(tsim && tsim.players.has(p.id) && tsim.players.get(p.id).x >= 0) && inView(p.render.x, p.render.y, 200)) {
         drawCursor(p, p.render.x, p.render.y, time, false);
       }
     }
-    if (joined && !myDisc && !myCar && !myV && !myH) {
+    if (joined && !myDisc && !myCar && !myV && !myH && !inTank()) {
       const self = players.get(myId) || { name: me.name, color: me.color, skin: me.skin };
       drawCursor(self, me.x, me.y, time, true);
     }
@@ -3619,10 +4095,12 @@
     drawOverlay();
     drawVOverlay();
     drawHOverlay();
+    drawTOverlay();
     drawStartLights();
     updateHud();
     updateVHud();
     updateHHud();
+    updateTHud();
     updateRaceHud();
     updatePing();
     requestAnimationFrame(frame);

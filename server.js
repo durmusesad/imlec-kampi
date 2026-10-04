@@ -8,6 +8,7 @@ const WORLD = require('./public/world.js');
 const { Match } = require('./public/haxball.js');
 const { VMatch } = require('./public/volleyball.js');
 const { HMatch } = require('./public/hockey.js');
+const { TMatch } = require('./public/tank.js');
 const TRACK = require('./public/track.js');
 const RC = require('./public/racing.js');
 const SKINS = require('./public/skins.js');
@@ -141,6 +142,11 @@ function moderate(admin, action, target, minutes) {
         notice(target, 'Yönetici seni izleyiciye aldı.');
         return `${target.name} voleybol takımından çıkarıldı.`;
       }
+      if (target.tanker) {
+        setTanker(target, false);
+        notice(target, 'Yönetici seni izleyiciye aldı.');
+        return `${target.name} tank oyunundan çıkarıldı.`;
+      }
       if (target.hteam) {
         setHTeam(target, null);
         notice(target, 'Yönetici seni izleyiciye aldı.');
@@ -164,6 +170,11 @@ function moderate(admin, action, target, minutes) {
       if (!vmatch) return 'Şu an voleybol maçı yok.';
       broadcast({ t: 'notice', text: 'Yönetici voleybol maçını bitirdi.' });
       stopVMatch();
+      return null;
+    case 'tstop':
+      if (!tmatch) return 'Şu an tank maçı yok.';
+      broadcast({ t: 'notice', text: 'Yönetici tank maçını bitirdi.' });
+      stopTMatch();
       return null;
     case 'hstop':
       if (!hmatch) return 'Şu an hokey maçı yok.';
@@ -199,10 +210,10 @@ function chatCommand(me, text) {
     return;
   }
   let action, target = null, minutes = 0;
-  const map = { sustur: 'mute', coz: 'unmute', çöz: 'unmute', at: 'kick', izleyici: 'spec', bitir: 'stop', baslat: 'start', başlat: 'start', temizle: 'clearchat', yarisbitir: 'stoprace', yarışbitir: 'stoprace', voleybitir: 'vstop', hokeybitir: 'hstop' };
+  const map = { sustur: 'mute', coz: 'unmute', çöz: 'unmute', at: 'kick', izleyici: 'spec', bitir: 'stop', baslat: 'start', başlat: 'start', temizle: 'clearchat', yarisbitir: 'stoprace', yarışbitir: 'stoprace', voleybitir: 'vstop', hokeybitir: 'hstop', tankbitir: 'tstop' };
   action = map[c];
   if (!action) {
-    notice(me, 'Komutlar: /sustur isim [dk] · /coz isim · /at isim · /izleyici isim · /bitir · /baslat · /yarisbitir · /voleybitir · /hokeybitir · /temizle');
+    notice(me, 'Komutlar: /sustur isim [dk] · /coz isim · /at isim · /izleyici isim · /bitir · /baslat · /yarisbitir · /voleybitir · /hokeybitir · /tankbitir · /temizle');
     return;
   }
   if (['mute', 'unmute', 'kick', 'spec'].includes(action)) {
@@ -226,6 +237,10 @@ let vmatch = null; // yürüyen voleybol maçı
 let vmatchStartedAt = 0;
 let vLastResult = null;
 let vEndAt = 0;
+let tmatch = null; // yürüyen tank maçı
+let tmatchStartedAt = 0;
+let tLast = null;
+let tEndAt = 0;
 let hmatch = null; // yürüyen buz hokeyi maçı
 let hmatchStartedAt = 0;
 let hLastResult = null;
@@ -270,10 +285,15 @@ function makeBot(at) {
 
 function botsIn(g, team) {
   const key = { f: 'team', v: 'vteam', h: 'hteam' }[g];
-  return [...players.values()].filter((p) => p.bot && (g === 'r' ? p.racer : p[key] === team));
+  return [...players.values()].filter((p) => p.bot && (g === 'r' ? p.racer : g === 't' ? p.tanker : p[key] === team));
 }
 
 function addBot(me, g, team, at) {
+  if (g === 't') {
+    if (tankerIds().length >= TK.maxTanks) return notice(me, `Tank oyunu dolu (en fazla ${TK.maxTanks} tank).`);
+    setTanker(makeBot(at), true);
+    return;
+  }
   if (g === 'r') {
     if (race) return notice(me, 'Yarış sürüyor, bitince bot ekleyebilirsin.');
     if (racerIds().length >= RC.MAX_CARS) return notice(me, `Start dolu (en fazla ${RC.MAX_CARS} araç).`);
@@ -350,6 +370,10 @@ function hteamIds(team) {
   return ids;
 }
 
+function tankerIds() {
+  return [...players.values()].filter((p) => p.tanker).sort((a, b) => a.tankerAt - b.tankerAt).map((p) => p.id);
+}
+
 function racerIds() {
   return [...players.values()].filter((p) => p.racer).sort((a, b) => a.racerAt - b.racerAt).map((p) => p.id);
 }
@@ -360,6 +384,7 @@ function lobbyState() {
     racers: racerIds(), raceRunning: !!race, raceLast: lastRace,
     vred: vteamIds('red'), vblue: vteamIds('blue'), vRunning: !!vmatch, vLast: vLastResult,
     hred: hteamIds('red'), hblue: hteamIds('blue'), hRunning: !!hmatch, hLast: hLastResult,
+    tankers: tankerIds(), tRunning: !!tmatch, tLast,
   };
 }
 
@@ -428,6 +453,7 @@ function setTeam(p, team) {
     if (hmatch && hmatch.players.has(p.id)) return notice(p, 'Hokey maçındasın; önce L ile maçtan çık.');
     p.hteam = null;
   }
+  if (team && p.tanker && !leaveTankLobby(p)) return;
   if (match && old) {
     match.removePlayer(p.id);
     teleportOut(p, old);
@@ -460,6 +486,7 @@ function setVTeam(p, team) {
     if (hmatch && hmatch.players.has(p.id)) return notice(p, 'Hokey maçındasın; önce L ile maçtan çık.');
     p.hteam = null;
   }
+  if (team && p.tanker && !leaveTankLobby(p)) return;
   if (vmatch && old) {
     vmatch.removePlayer(p.id);
     teleportOutV(p, old);
@@ -559,6 +586,7 @@ function setHTeam(p, team) {
     if (race && race.cars.has(p.id)) return notice(p, 'Yarıştasın; önce L ile yarıştan çık.');
     p.racer = false;
   }
+  if (team && p.tanker && !leaveTankLobby(p)) return;
   if (hmatch && old) {
     hmatch.removePlayer(p.id);
     const pad = WORLD.HPADS[old];
@@ -633,6 +661,121 @@ function stepHMatch(now) {
   }
 }
 
+// ---------- Tank ----------
+const TK = WORLD.TK;
+// Başka oyuna geçerken tank listesinden çık (tank maçında oynuyorsa önce L gerekir)
+function leaveTankLobby(p) {
+  if (tmatch && tmatch.players.has(p.id)) {
+    notice(p, 'Tank maçındasın; önce L ile maçtan çık.');
+    return false;
+  }
+  p.tanker = false;
+  return true;
+}
+
+function setTanker(p, on) {
+  if (on === !!p.tanker) return;
+  if (on) {
+    if (tankerIds().length >= TK.maxTanks) return notice(p, `Tank oyunu dolu (en fazla ${TK.maxTanks} tank).`);
+    const busy = (match && match.players.has(p.id) && 'Futbol') || (vmatch && vmatch.players.has(p.id) && 'Voleybol') ||
+      (hmatch && hmatch.players.has(p.id) && 'Hokey') || (race && race.cars.has(p.id) && 'Yarış');
+    if (busy) return notice(p, `${busy} oyunundasın; önce L ile çık.`);
+    p.team = p.vteam = p.hteam = null;
+    p.racer = false;
+    p.tanker = true;
+    p.tankerAt = Date.now();
+    if (tmatch) {
+      tmatch.addPlayer(p.id); // sıradaki turda başlar
+      chan(p, 't').queue = [];
+    }
+  } else {
+    p.tanker = false;
+    if (tmatch && tmatch.players.has(p.id)) {
+      tmatch.removePlayer(p.id);
+      const pad = WORLD.TPADS.join;
+      p.x = pad.x + pad.w / 2;
+      p.y = pad.y + pad.h + 60;
+      send(p.ws, { t: 'tp', x: p.x, y: p.y });
+    }
+  }
+  broadcastLobby();
+}
+
+function syncCursorToTank(p) {
+  const t = tmatch && tmatch.players.get(p.id);
+  if (!t || t.x < 0) return;
+  p.x = TK.x + t.x;
+  p.y = TK.y + t.y;
+}
+
+function startTMatch() {
+  tmatch = new TMatch();
+  tmatchStartedAt = Date.now();
+  tLast = null;
+  for (const id of tankerIds()) {
+    chan(players.get(id), 't').queue = [];
+    tmatch.addPlayer(id);
+  }
+  tmatch.newRound((Math.random() * 0x7fffffff) | 0 || 7);
+  broadcastLobby();
+  broadcastTMatch();
+}
+
+function stopTMatch() {
+  if (!tmatch) return;
+  for (const p of players.values()) syncCursorToTank(p);
+  tmatch = null;
+  broadcastLobby();
+}
+
+function tackOf(id) {
+  const p = players.get(id);
+  const c = p && chan(p, 't');
+  return c ? [c.ack, c.buf] : [0, 2];
+}
+
+// Mayınlar sadece sahibine gider: her oyuncuya kendi mayınlarını ekleyerek gönder
+function broadcastTMatch() {
+  if (!tmatch) return;
+  const F = WORLD.TFIELD, M = 1200;
+  const base = { t: 'tg', ...tmatch.snapshot(tackOf) };
+  const data = JSON.stringify(base);
+  const far = base.n % 15 === 0;
+  for (const p of players.values()) {
+    const ws = p.ws;
+    if (!ws || ws.readyState !== 1 || ws.bufferedAmount > FRESH_MAX_BUFFER) continue;
+    const mine = tmatch.players.has(p.id);
+    if (!mine && !far && !(p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M)) continue;
+    const mn = mine ? tmatch.minesOf(p.id) : null;
+    ws.send(mn && mn.length ? JSON.stringify({ ...base, mn }) : data);
+  }
+}
+
+function stepTMatch(now) {
+  for (const t of tmatch.players.values()) {
+    const p = players.get(t.id);
+    if (p && p.bot) tmatch.setInput(t.id, BOTS.tank(tmatch, t));
+    else if (p) pullInput(p, chan(p, 't'), now, (k) => tmatch.setInput(t.id, k));
+  }
+  let events;
+  if (tmatch.phase !== 'ended' && tmatch.players.size < 2) {
+    events = [];
+    tmatch.finish(events, 'few');
+  } else events = stepOrAbandon(tmatch);
+  for (const ev of events) {
+    if (ev.type === 'kill') broadcast({ t: 'tkill', id: ev.id, by: ev.by, how: ev.how, x: ev.x, y: ev.y });
+    else if (ev.type === 'boom') broadcast({ t: 'tboom', x: ev.x, y: ev.y });
+    else if (ev.type === 'round') {
+      if (ev.winner != null && scores[ev.winner] != null) scores[ev.winner]++;
+      broadcast({ t: 'tround', winner: ev.winner, round: ev.round, scores });
+    } else if (ev.type === 'end') {
+      tLast = ev.standings.map((x) => ({ ...x, name: (players.get(x.id) || {}).name || '?' }));
+      broadcast({ t: 'tend', reason: ev.reason, standings: tLast });
+      tEndAt = Date.now() + 2500;
+    }
+  }
+}
+
 // ---------- F1 yarışı ----------
 function setRacer(p, on) {
   if (on === !!p.racer) return;
@@ -651,6 +794,7 @@ function setRacer(p, on) {
       if (hmatch && hmatch.players.has(p.id)) return notice(p, 'Hokey maçındasın; önce L ile maçtan çık.');
       p.hteam = null;
     }
+    if (p.tanker && !leaveTankLobby(p)) return;
     p.racer = true;
     p.racerAt = Date.now();
   } else {
@@ -730,6 +874,8 @@ function removePlayer(p) {
   if (match) match.removePlayer(p.id);
   if (vmatch) vmatch.removePlayer(p.id);
   if (hmatch) hmatch.removePlayer(p.id);
+  if (tmatch) tmatch.removePlayer(p.id);
+  if (p.tanker) broadcastLobby();
   if (race) race.removeCar(p.id);
   if (p.hteam) broadcastLobby();
   if (p.vteam) broadcastLobby();
@@ -774,7 +920,7 @@ wss.on('connection', (ws) => {
         me = restored;
         me.ws = ws;
         me.ghostUntil = 0;
-        for (const k of ['m', 'r', 'v', 'h']) chan(me, k).queue = [];
+        for (const k of ['m', 'r', 'v', 'h', 't']) chan(me, k).queue = [];
         me.afk = me.typing = false;
       } else {
         if ([...players.values()].filter((p) => !p.bot).length >= MAX_PLAYERS) {
@@ -811,6 +957,7 @@ wss.on('connection', (ws) => {
       if (match) send(ws, { t: 'g', ...match.snapshot(ackOf) });
       if (vmatch) send(ws, { t: 'vg', ...vmatch.snapshot(vackOf) });
       if (hmatch) send(ws, { t: 'hg', ...hmatch.snapshot(hackOf) });
+      if (tmatch) send(ws, { t: 'tg', ...tmatch.snapshot(tackOf), mn: tmatch.minesOf(me.id) });
       if (race) broadcastRace();
       broadcast({ t: 'join', p: publicPlayer(me) }, me.id); // geri dönende isim/renk değişmiş olabilir
       return;
@@ -823,6 +970,7 @@ wss.on('connection', (ws) => {
         if (match && match.players.has(me.id)) return; // maçtayken konumu disk belirler
         if (vmatch && vmatch.players.has(me.id)) return;
         if (hmatch && hmatch.players.has(me.id)) return;
+        if (tmatch && tmatch.players.has(me.id) && tmatch.players.get(me.id).x >= 0) return;
         if (race && race.cars.has(me.id)) return; // yarıştayken konumu araç belirler
         me.x = clamp(m.x, 0, WORLD.W);
         me.y = clamp(m.y, 0, WORLD.H);
@@ -830,14 +978,16 @@ wss.on('connection', (ws) => {
       }
       case 'i':
       case 'ri':
-      case 'hi': {
+      case 'hi':
+      case 'ti': {
         // Maç/yarış girdisi: her istemci tick'i için bir tane; sunucu her tick'te bir tane uygular
-        const name = m.t === 'ri' ? 'r' : m.t === 'hi' ? 'h' : 'm';
+        const name = m.t === 'ri' ? 'r' : m.t === 'hi' ? 'h' : m.t === 'ti' ? 't' : 'm';
         if (!num(m.s) || !num(m.k)) return;
-        const game = name === 'r' ? race && race.cars : name === 'h' ? hmatch && hmatch.players : match && match.players;
+        const game = name === 'r' ? race && race.cars : name === 'h' ? hmatch && hmatch.players
+          : name === 't' ? tmatch && tmatch.players : match && match.players;
         if (!(game && game.has(me.id))) return;
         const c = chan(me, name);
-        c.queue.push([m.s, m.k & 31]);
+        c.queue.push([m.s, m.k & (name === 't' ? 255 : 31)]);
         c.lastInputAt = Date.now();
         if (c.queue.length > 8) c.queue.splice(0, c.queue.length - 8); // gecikme birikmesin
         break;
@@ -867,6 +1017,20 @@ wss.on('connection', (ws) => {
         }
         break;
       }
+      case 'tpad': {
+        const pad = WORLD.TPADS[m.pad];
+        if (!pad || !onPad(me, pad) || !allow(me, 'pad', 3, 1000)) return;
+        if (m.pad === 'join') setTanker(me, !me.tanker);
+        else if (m.pad === 'start') {
+          if (tmatch) {
+            if (!me.admin) return notice(me, 'Tank maçı sürüyor. Sadece yönetici bitirebilir.');
+            if (Date.now() - tmatchStartedAt < 3000) return;
+            moderate(me, 'tstop');
+          } else if (tankerIds().length < 2) notice(me, 'Başlatmak için en az 2 tank gerekli (bot da olur).');
+          else startTMatch();
+        }
+        break;
+      }
       case 'hpad': {
         const pad = WORLD.HPADS[m.pad];
         if (!pad || !onPad(me, pad) || !allow(me, 'pad', 3, 1000)) return;
@@ -888,7 +1052,9 @@ wss.on('connection', (ws) => {
         const at = { x: bp.r.x + bp.r.w / 2, y: bp.r.y + bp.r.h + 50 };
         if (bp.op === 'add') addBot(me, bp.g, bp.team, at);
         else if (bp.op === 'del') removeBot(me, bp.g, bp.team);
-        else if (bp.op === 'fill') {
+        else if (bp.op === 'fill' && bp.g === 't') {
+          while (tankerIds().length < TK.maxTanks) setTanker(makeBot(at), true);
+        } else if (bp.op === 'fill') {
           if (race) return notice(me, 'Yarış sürüyor, bitince bot ekleyebilirsin.');
           while (racerIds().length < RC.MAX_CARS) setRacer(makeBot(at), true);
         }
@@ -926,7 +1092,8 @@ wss.on('connection', (ws) => {
         break;
       }
       case 'leave': {
-        if (me.racer) setRacer(me, false);
+        if (me.tanker) setTanker(me, false);
+        else if (me.racer) setRacer(me, false);
         else if (me.vteam) setVTeam(me, null);
         else if (me.hteam) setHTeam(me, null);
         else if (me.team) setTeam(me, null);
@@ -1031,11 +1198,12 @@ wss.on('connection', (ws) => {
     }
     // Beklenmedik kopma (wifi, Cloud Run 60 dk sınırı): kısa süre yerini koru ama imlecini gizle
     me.ws = null;
-    for (const k of ['m', 'r', 'v', 'h']) chan(me, k).queue = [];
+    for (const k of ['m', 'r', 'v', 'h', 't']) chan(me, k).queue = [];
     me.ghostUntil = Date.now() + RECONNECT_GRACE;
     if (match) match.setInput(me.id, 0);
     if (vmatch) vmatch.setInput(me.id, 0);
     if (hmatch) hmatch.setInput(me.id, 0);
+    if (tmatch) tmatch.setInput(me.id, 0);
     if (race) race.setInput(me.id, 0);
     broadcast({ t: 'away', id: me.id });
   });
@@ -1101,7 +1269,7 @@ function pullInput(p, c, now, set) {
   // Tamponu aşan fazlalık gecikme demektir; atılan girdideki vuruş basışı korunur
   while (c.queue.length > c.buf) {
     const drop = c.queue.shift();
-    c.queue[0][1] |= drop[1] & 112; // atılan girdideki vuruş/smaç/balıklama basışı korunur
+    c.queue[0][1] |= drop[1] & 240; // atılan girdideki vuruş/smaç/balıklama/mayın basışı korunur
   }
 }
 
@@ -1168,14 +1336,15 @@ const TICK_MS = 1000 / 60;
 let nextTick = performance.now();
 setInterval(() => {
   const now = performance.now();
-  if (!match && !race && !vmatch && !hmatch) {
+  if (!match && !race && !vmatch && !hmatch && !tmatch) {
     nextTick = now;
     return;
   }
   if (now - nextTick > 250) nextTick = now; // uzun duraklamadan sonra yetişmeye çalışma
   let stepped = false;
   const wall = Date.now();
-  while ((match || race || vmatch || hmatch) && nextTick <= now) {
+  while ((match || race || vmatch || hmatch || tmatch) && nextTick <= now) {
+    if (tmatch) stepTMatch(wall);
     if (match) stepMatch(wall);
     if (vmatch) stepVMatch(wall);
     if (hmatch) stepHMatch(wall);
@@ -1192,6 +1361,11 @@ setInterval(() => {
     for (const p of players.values()) syncCursorToVb(p);
     if (stepped) broadcastVMatch();
     if (vmatch.phase === 'ended' && Date.now() >= vEndAt) stopVMatch();
+  }
+  if (tmatch) {
+    for (const p of players.values()) syncCursorToTank(p);
+    if (stepped) broadcastTMatch();
+    if (tmatch.phase === 'ended' && Date.now() >= tEndAt) stopTMatch();
   }
   if (hmatch) {
     for (const p of players.values()) syncCursorToHk(p);

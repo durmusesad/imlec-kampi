@@ -449,6 +449,27 @@
       burst({ filter: 'bandpass', f: 600, f2: 2400, q: 0.8, dur: 0.22, vol: 0.3 * v, pan, attack: 0.02 });
       burst({ filter: 'lowpass', f: 700, f2: 200, q: 0.7, dur: 0.35, vol: 0.25 * v, pan, delay: 0.12 });
     },
+    // Tank: atış, sekme, patlama, mayın kurulumu
+    tankFire(v, pan) {
+      v = clamp(v, 0, 1);
+      burst({ filter: 'bandpass', f: 1800, f2: 600, q: 1.2, dur: 0.08, vol: 0.3 * v, pan });
+      tone({ f: 520, f2: 140, dur: 0.1, vol: 0.22 * v, pan, type: 'square' });
+    },
+    ricochet(v, pan) {
+      v = clamp(v, 0, 1);
+      if (v < 0.05) return;
+      tone({ f: 2600, f2: 1500, dur: 0.05, vol: 0.07 * v, pan, type: 'triangle' });
+    },
+    boom(v, pan) {
+      v = clamp(v, 0, 1);
+      burst({ filter: 'lowpass', f: 1400, f2: 120, q: 0.7, dur: 0.7, vol: 0.6 * v, pan });
+      tone({ f: 70, f2: 28, dur: 0.6, vol: 0.5 * v, pan, type: 'triangle' });
+      burst({ filter: 'highpass', f: 2500, q: 0.8, dur: 0.12, vol: 0.18 * v, pan, delay: 0.03 });
+    },
+    minePlant() {
+      tone({ f: 660, dur: 0.06, vol: 0.1, type: 'square' });
+      tone({ f: 880, dur: 0.06, vol: 0.1, type: 'square', delay: 0.09 });
+    },
     // Arayüz
     click() { tone({ f: 1100, f2: 700, dur: 0.06, vol: 0.12, type: 'triangle' }); },
     chat() { tone({ f: 988, dur: 0.08, vol: 0.06 }); tone({ f: 1319, dur: 0.1, vol: 0.05, delay: 0.06 }); },

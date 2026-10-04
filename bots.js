@@ -228,8 +228,98 @@ function race(r, c) {
   return bits;
 }
 
+// ---------- Tank ----------
+const TANKS = require('./public/tank.js');
+const TK = WORLD.TK;
+const MINE = 128;
+// Labirentte en kısa yol (hücre hücre); kendi kurulu mayınlarının olduğu hücrelerden kaçınır
+function bfs(map, from, to, avoid) {
+  const C = TK.cols, R = TK.rows, prev = new Int16Array(C * R).fill(-1);
+  const q = [from];
+  prev[from] = from;
+  const step = [[1, 0, -C], [2, 1, 0], [4, 0, C], [8, -1, 0]];
+  while (q.length) {
+    const c = q.shift();
+    if (c === to) break;
+    for (const [bit, dx, dy] of step) {
+      if (!(map.open[c] & bit)) continue;
+      const n = c + dx + dy;
+      if (prev[n] !== -1 || (avoid.has(n) && n !== to)) continue;
+      prev[n] = c;
+      q.push(n);
+    }
+  }
+  if (prev[to] === -1) return null;
+  const path = [to];
+  while (path[0] !== from) path.unshift(prev[path[0]]);
+  return path;
+}
+const angDiff = (a, b) => {
+  let d = a - b;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return d;
+};
+function tank(m, me) {
+  if (!me.alive || m.phase === 'ready' || me.plant > 0) return 0;
+  const st = mem.get(me.id) || { seen: 0, stuck: 0, rev: 0, lx: me.x, ly: me.y, aim: 0 };
+  mem.set(me.id, st);
+  const map = m.map;
+  const foes = m.aliveList().filter((t) => t.id !== me.id);
+  if (!foes.length) return 0;
+  const C = TK.cols, CELL = TK.cell;
+  const here = TANKS.cellOf(me.x, me.y);
+  const avoid = new Set(m.mines.filter((x) => x.owner === me.id && x.armed).map((x) => TANKS.cellOf(x.x, x.y)));
+  // En yakın rakip (yol uzunluğuna göre)
+  let target = null, path = null;
+  for (const f of foes) {
+    const p = bfs(map, here, TANKS.cellOf(f.x, f.y), avoid);
+    if (p && (!path || p.length < path.length)) { path = p; target = f; }
+  }
+  if (!target) target = foes[0];
+  let bits = 0;
+  // Geri kaçış (takıldıysa)
+  if (st.rev > 0) {
+    st.rev--;
+    return DOWN | (st.rev % 40 < 20 ? LEFT : RIGHT);
+  }
+  const see = Math.hypot(target.x - me.x, target.y - me.y) < 900 && TANKS.lineClear(map, me.x, me.y, target.x, target.y, TK.bulletR + 1);
+  st.seen = see ? st.seen + 1 : 0;
+  if (see) {
+    // Görüyorsa dur, dön, nişan alınca ateş et (biraz tepki süresi ve sapma: yenilebilir olsun)
+    if (st.seen === 1) st.aim = (Math.random() - 0.5) * 0.12;
+    const want = Math.atan2(target.y - me.y, target.x - me.x) + st.aim;
+    const d = angDiff(want, me.a);
+    if (d > 0.04) bits |= RIGHT;
+    else if (d < -0.04) bits |= LEFT;
+    if (Math.abs(d) < 0.1 && st.seen > 18 && me.fireReady) bits |= KICK;
+    if (Math.hypot(target.x - me.x, target.y - me.y) > 420 && Math.abs(d) < 0.3) bits |= UP;
+    return bits;
+  }
+  // Yolu izle: sıradaki hücrenin merkezine (görüş varsa bir sonrakine) git
+  let wp = path && path.length > 1 ? path[1] : here;
+  if (path && path.length > 2) {
+    const n2 = path[2], x2 = (n2 % C + 0.5) * CELL, y2 = (Math.floor(n2 / C) + 0.5) * CELL;
+    if (TANKS.lineClear(map, me.x, me.y, x2, y2, TK.tankR)) wp = n2;
+  }
+  const wx = (wp % C + 0.5) * CELL, wy = (Math.floor(wp / C) + 0.5) * CELL;
+  const d = angDiff(Math.atan2(wy - me.y, wx - me.x), me.a);
+  if (d > 0.08) bits |= RIGHT;
+  else if (d < -0.08) bits |= LEFT;
+  if (Math.abs(d) < 0.45) bits |= UP;
+  // Takılma kontrolü
+  const moved = Math.hypot(me.x - st.lx, me.y - st.ly);
+  st.lx = me.x;
+  st.ly = me.y;
+  st.stuck = bits & UP && moved < 0.3 ? st.stuck + 1 : 0;
+  if (st.stuck > 45) { st.rev = 30; st.stuck = 0; }
+  // Arada koridora mayın bırak
+  if (me.minesLeft > 0 && me.mineReady && m.phase === 'play' && Math.random() < 1 / 1200) bits = MINE;
+  return bits;
+}
+
 function forget(id) {
   mem.delete(id);
 }
 
-module.exports = { football, hockey, volley, race, forget };
+module.exports = { football, hockey, volley, race, tank, forget };
