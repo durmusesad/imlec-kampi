@@ -261,9 +261,10 @@ const angDiff = (a, b) => {
   return d;
 };
 function tank(m, me) {
-  if (!me.alive || m.phase === 'ready' || me.plant > 0) return 0;
+  if (!me.alive || m.phase === 'ready') return 0;
   const st = mem.get(me.id) || { seen: 0, stuck: 0, rev: 0, lx: me.x, ly: me.y, aim: 0 };
   mem.set(me.id, st);
+  if (me.plant > 0) return MINE; // kurulum bitene kadar F basılı
   const map = m.map;
   const foes = m.aliveList().filter((t) => t.id !== me.id);
   if (!foes.length) return 0;

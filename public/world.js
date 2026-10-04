@@ -131,8 +131,8 @@
 
   // Tank oyunu (AZ Tank benzeri): buz pistinin altında labirent. Koordinatlar arena içinde piksel (sol üst 0,0)
   const TK = {
-    x: 2500, y: 1260, cols: 15, rows: 8, cell: 120, wall: 8,
-    tankR: 15, speed: 2.1, backSpeed: 1.5, rot: 0.055, // px/tick, rad/tick
+    x: 2725, y: 1300, cols: 15, rows: 8, cell: 90, wall: 7,
+    tankR: 17, speed: 2.1, backSpeed: 1.5, rot: 0.055, // px/tick, rad/tick
     bulletR: 4, bulletSpeed: 4.2, range: 2520, // menzil: 2520 px / 4.2 px/tick = 600 tick = 10 sn
     maxBullets: 5, grace: 24, // kendi merminin sahibine zarar vermeden alacağı yol (namludan çıkış)
     mines: 2, plantSeconds: 3, mineR: 9, blast: 52,

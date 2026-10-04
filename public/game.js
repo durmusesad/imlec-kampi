@@ -128,7 +128,6 @@
     joined = true;
     $('join').classList.add('hidden');
     ['players', 'keys', 'chatlog', 'ping', 'soundBtn'].forEach((id) => $(id).classList.remove('hidden'));
-    flashKeys();
     connect();
     requestLock();
     updateModeUi();
@@ -617,7 +616,6 @@
         if (!m.tRunning) resetTView();
         if (!wasVb && inVb()) resetAim();
         if (wasIn !== inMatch() || wasRace !== inRace() || wasVb !== inVb() || wasHk !== inHk() || wasTk !== inTank()) {
-          flashKeys(); // maça/yarışa girince/çıkınca ilgili tuşları kısaca göster
           keys.clear(); // sadece kendi durumum değişince; başkası takım değiştirince tuşlarım bırakılmasın
         }
         renderPlayerList();
@@ -2507,7 +2505,7 @@
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('🪖 Tank · W/S git · A/D dön · Space ateş (5 mermi, duvardan seker) · F mayın (3 sn bekle)', TK.x + TK.w / 2, P.join.y + P.join.h + 58);
+    ctx.fillText('🪖 Tank · W/S git · A/D dön · Space ateş (5 mermi, duvardan seker) · F basılı tut: mayın (3 sn)', TK.x + TK.w / 2, P.join.y + P.join.h + 58);
   }
 
   function shade(hex, k) {
@@ -2521,6 +2519,7 @@
     const x = TK.x + d.x, y = TK.y + d.y;
     ctx.save();
     ctx.translate(x, y);
+    ctx.scale(TK.tankR / 15, TK.tankR / 15); // çizim 15 px yarıçapa göre
     if (!t.alive) {
       // Enkaz
       ctx.rotate(d.a);
@@ -2568,20 +2567,26 @@
     ctx.fill();
     ctx.stroke();
     ctx.restore();
-    // Mayın kuruluyor: ilerleme halkası
+    // Mayın kuruluyor: 3 saniyede dolan bar
     if (t.plant > 0) {
-      const k = 1 - t.plant / (TK.plantSeconds * TA.TPS);
-      ctx.strokeStyle = '#ffd23f';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(x, y, 22, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * k);
-      ctx.stroke();
+      const k = Math.min(1, t.plant / (TK.plantSeconds * TA.TPS)), bw = 40, bx = x - bw / 2, by = y + 24;
+      ctx.fillStyle = INK;
+      roundRect(ctx, bx - 2, by - 2, bw + 4, 10, 4);
+      ctx.fill();
+      ctx.fillStyle = '#5a4a3a';
+      ctx.fillRect(bx, by, bw, 6);
+      ctx.fillStyle = k >= 1 ? '#3ecf8e' : '#ffd23f';
+      ctx.fillRect(bx, by, bw * k, 6);
+      ctx.font = '12px system-ui, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('💣', bx - 4, by + 3);
     }
     if (t.id === myId) {
       ctx.strokeStyle = 'rgba(255,255,255,0.7)';
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.arc(x, y, 25, 0, Math.PI * 2);
+      ctx.arc(x, y, TK.tankR + 9, 0, Math.PI * 2);
       ctx.stroke();
     }
     if (pl) {
@@ -2592,10 +2597,10 @@
       ctx.strokeStyle = 'rgba(0,0,0,0.55)';
       ctx.fillStyle = '#fff';
       const nm = (pl.admin ? '👑 ' : '') + pl.name;
-      ctx.strokeText(nm, x, y - 26);
-      ctx.fillText(nm, x, y - 26);
+      ctx.strokeText(nm, x, y - TK.tankR - 11);
+      ctx.fillText(nm, x, y - TK.tankR - 11);
       ctx.save();
-      ctx.translate(x - 6, y - 40);
+      ctx.translate(x - 6, y - TK.tankR - 25);
       drawSocial(pl, time);
       ctx.restore();
     }
@@ -4039,11 +4044,12 @@
       }
       me.vx = me.vy = 0;
       inAx = inAy = 0;
-      camLead.x = TK.x + TK.w / 2 - me.x;
-      camLead.y = TK.y + TK.h / 2 - me.y;
+      // Ekran labirenti alıyorsa ortasına bak, almıyorsa kendi tankını takip et (yakınlaştırma yok)
+      if (wvw >= TK.w + 40) camLead.x = TK.x + TK.w / 2 - me.x;
+      if (wvh >= TK.h + 120) camLead.y = TK.y + TK.h / 2 - me.y;
     } else if (joined && !inMatch() && !inRace() && !inVb() && !inHk()) stepMovement(dt);
     // Yakınlaştırma yumuşak geçer; görünen alan değişirken kamera merkezi sabit kalsın
-    const targetZoom = myCar ? RACE_ZOOM : inTank() ? Math.min(1, (vw - 360) / TK.w, (vh - 150) / TK.h) : 1; // kenar paneller labirenti örtmesin
+    const targetZoom = myCar ? RACE_ZOOM : 1;
     if (Math.abs(targetZoom - zoom) > 0.001) {
       const cx = cam.x + wvw / 2, cy = cam.y + wvh / 2;
       zoom += (targetZoom - zoom) * (1 - Math.exp(-dt * 4));
@@ -4091,7 +4097,7 @@
     }
     ctx.restore();
     audioFrame(dt, rr);
-    if (joined) drawMinimap();
+    if (joined && !inTank()) drawMinimap(); // tankta köşedeki tankları örtmesin
     drawOverlay();
     drawVOverlay();
     drawHOverlay();

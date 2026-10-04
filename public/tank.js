@@ -271,8 +271,13 @@
         if (!t.alive) continue;
         const k = t.input;
         if (t.plant > 0) {
-          // Mayın kuruluyor: tank kıpırdayamaz
-          if (--t.plant === 0) {
+          // Mayın kuruluyor: F basılı kaldıkça bar dolar (3 sn), erken bırakılırsa iptal; bu sürede tank kıpırdamaz
+          if (!(k & INPUT.MINE)) {
+            t.plant = 0;
+            t.mineReady = true;
+          } else if (++t.plant >= Math.round(T.plantSeconds * TPS)) {
+            t.plant = 0;
+            t.mineReady = false; // sıradaki mayın için tuş bırakılıp yeniden basılmalı
             t.minesLeft--;
             this.mines.push({ id: this.nextId++, owner: t.id, x: t.x, y: t.y, armed: false });
             ev.push({ type: 'mine', id: t.id });
@@ -290,10 +295,9 @@
             t.y += Math.sin(t.a) * sp;
           }
           for (let i = 0; i < 2; i++) for (const w of map.near[cellOf(t.x, t.y)]) pushOut(t, T.tankR, w);
-          if (k & INPUT.MINE) {
-            if (t.mineReady && t.minesLeft > 0 && this.phase === 'play') t.plant = Math.round(T.plantSeconds * TPS);
-            t.mineReady = false;
-          } else t.mineReady = true;
+          // Mayın: F basılı tutulunca kurulum başlar (tank kıpırdamaz)
+          if (k & INPUT.MINE && t.mineReady && t.minesLeft > 0 && this.phase === 'play') t.plant = 1;
+          if (!(k & INPUT.MINE)) t.mineReady = true;
         }
         // Ateş: her basışta bir mermi, aynı anda en fazla 5
         if (k & INPUT.FIRE) {
