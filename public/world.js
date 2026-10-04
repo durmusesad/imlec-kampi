@@ -3,8 +3,8 @@
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.WORLD = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
-  // Dünya: eski kamp alanı (3000x2000) + sağda Istanbul Park yarış pisti bölgesi
-  const W = 8100;
+  // Dünya: eski kamp alanı (3000x2000) + gölün sağında hokey sahası + sağda Istanbul Park yarış pisti bölgesi
+  const W = 9450;
   const H = 3520;
   const CAMP_W = 3000;
   const CAMP_H = 2000;
@@ -92,6 +92,43 @@
     blue: { x: VB.cx + 190, y: VFIELD.y + VFIELD.h + 45, w: 200, h: 90 },
   };
 
+  // Buz hokeyi sahası: gölün sağında. Fizik hokey birimlerinde (merkez 0,0), dünyaya S katıyla ölçeklenir
+  const HK = {
+    S: 1.5,
+    cx: 3600,
+    cy: 600,
+    rinkX: 500, rinkY: 220, cornerR: 100, // bantların iç yarı ölçüleri, köşe yarıçapı
+    goalX: 420, goalW: 30, goalD: 22, // kale çizgisi (merkezden), kale ağzı yarı genişliği, ağ derinliği
+    postRadius: 3,
+    blueLine: 140, faceoffRadius: 60,
+    spawnDistance: 180,
+    // Paten: düşük ivme + çok az sürtünme = kayarak, gecikmeli dönen hareket
+    player: {
+      radius: 14, bCoef: 0.4, invMass: 0.5, accel: 0.055, damping: 0.988, brake: 1.6,
+      shootingAccel: 0.04, shootingDamping: 0.985, shotStrength: 7.5,
+    },
+    puck: { radius: 5, bCoef: 0.5, invMass: 1.2, damping: 0.997, maxSpeed: 13 },
+    shotRange: 5,
+    boardsPuck: 0.85, boardsPlayer: 0.35, // bantların sektirme katsayısı
+    periods: 3, periodSeconds: 90,
+    countdownSeconds: 3, faceoffSeconds: 5, goalSeconds: 3,
+    teamMax: 5,
+    teams: {
+      red: { name: 'Kırmızı', color: '#e56e56' },
+      blue: { name: 'Mavi', color: '#5689e5' },
+    },
+  };
+  const hkToWorld = (x, y) => ({ x: HK.cx + x * HK.S, y: HK.cy + y * HK.S });
+  // Saha dünya dikdörtgeni (bantlar dahil değil)
+  const HFIELD = {
+    x: HK.cx - HK.rinkX * HK.S, y: HK.cy - HK.rinkY * HK.S, w: HK.rinkX * 2 * HK.S, h: HK.rinkY * 2 * HK.S,
+  };
+  const HPADS = {
+    red: { x: HK.cx - 390, y: HFIELD.y + HFIELD.h + 50, w: 200, h: 90 },
+    start: { x: HK.cx - 100, y: HFIELD.y + HFIELD.h + 50, w: 200, h: 90 },
+    blue: { x: HK.cx + 190, y: HFIELD.y + HFIELD.h + 50, w: 200, h: 90 },
+  };
+
   const LAKE = { cx: 2330, cy: 560, rx: 420, ry: 280, mult: 0.45 };
   const RIVER = {
     width: 110,
@@ -100,7 +137,8 @@
     points: [[1640, -60], [1700, 180], [1860, 300], [1960, 470], [2000, 560]],
   };
   const MUD = { cx: 720, cy: 1560, rx: 330, ry: 190, mult: 0.28 };
-  const ICE = { x: 2080, y: 1220, w: 640, h: 480, friction: 0.985 };
+  // Gezinirken buz: hokey sahasının kendisi
+  const ICE = { ...HFIELD, friction: 0.985 };
 
   // Kare başına en fazla hareket (px)
   const MAX_STEP = { land: 45, water: 22, ocean: 13, mud: 16 };
@@ -119,10 +157,10 @@
   const TREES = [
     [120, 140, 38], [260, 90, 30], [90, 420, 34], [220, 700, 40], [110, 980, 32],
     [300, 1180, 36], [140, 1330, 30], [1180, 1500, 34], [1320, 1720, 40], [1520, 1880, 30],
-    [1720, 1580, 36], [1880, 1820, 32], [2860, 120, 36], [2900, 960, 34], [2800, 1080, 30],
+    [1720, 1580, 36], [1880, 1820, 32], [2860, 120, 36], [2800, 1080, 30],
     [2920, 1840, 38], [1860, 980, 34], [1960, 1110, 30], [1250, 110, 32], [1030, 210, 28],
     [620, 150, 34], [2600, 1900, 30], [2240, 1880, 34], [60, 1850, 36], [420, 1880, 30],
-    [1100, 1300, 28], [2860, 760, 32], [1740, 760, 30],
+    [1100, 1300, 28], [1740, 760, 30], [2380, 1400, 34], [2560, 1560, 30],
   ];
 
   function inEllipse(x, y, e) {
@@ -166,9 +204,19 @@
       return { kind: 'river', mult: RIVER.mult, max: MAX_STEP.water, force: { x: r.tx * s, y: r.ty * s } };
     }
     if (inEllipse(x, y, MUD)) return { kind: 'mud', mult: MUD.mult, max: MAX_STEP.mud };
-    if (inRect(x, y, ICE)) return { kind: 'ice', mult: 1, max: MAX_STEP.land };
+    if (inRink(x, y)) return { kind: 'ice', mult: 1, max: MAX_STEP.land };
     if (inRect(x, y, FIELD)) return { kind: 'grass', mult: 1, max: MAX_STEP.land };
     return { kind: 'sand', mult: 1, max: MAX_STEP.land };
+  }
+
+  // Hokey sahasının içi (yuvarlak köşeler dahil), dünya koordinatı
+  function inRink(x, y, m = 0) {
+    const hx = (x - HK.cx) / HK.S, hy = (y - HK.cy) / HK.S;
+    const ix = HK.rinkX - HK.cornerR, iy = HK.rinkY - HK.cornerR;
+    const ax = Math.abs(hx), ay = Math.abs(hy);
+    if (ax > HK.rinkX + m || ay > HK.rinkY + m) return false;
+    if (ax <= ix || ay <= iy) return true;
+    return Math.hypot(ax - ix, ay - iy) <= HK.cornerR + m;
   }
 
   function isWater(kind) {
@@ -177,6 +225,7 @@
 
   return {
     W, H, CAMP_W, CAMP_H, SPAWN, FIELD, HAX, PADS, toWorld, VB, VFIELD, VPADS, vbToWorld,
+    HK, HFIELD, HPADS, hkToWorld, inRink,
     LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOJI_PALETTE, DEFAULT_QUICK, CHAT_MAX, TREES,
     terrainAt, riverNearest, inEllipse, inRect, isWater,
   };

@@ -235,7 +235,7 @@
       pickRadial();
       return;
     }
-    if (inMatch() || inRace()) return;
+    if (inMatch() || inRace() || inHk()) return;
     // Sol tık sadece etkileşimli alanlarda bir şey yapar (boş yere tıklamak hiçbir şey göndermez)
     for (const [name, pad] of Object.entries(W.PADS)) {
       if (W.inRect(me.x, me.y, pad)) {
@@ -255,6 +255,13 @@
       if (W.inRect(me.x, me.y, pad)) {
         SFX.click();
         send({ t: 'vpad', pad: name });
+        return;
+      }
+    }
+    for (const [name, pad] of Object.entries(W.HPADS)) {
+      if (W.inRect(me.x, me.y, pad)) {
+        SFX.click();
+        send({ t: 'hpad', pad: name });
         return;
       }
     }
@@ -307,6 +314,11 @@
       pending.push([seq, 0]);
       send({ t: 'i', s: seq, k: 0 });
     }
+    if (inHk() && hsim) {
+      hseq++;
+      hpending.push([hseq, 0]);
+      send({ t: 'hi', s: hseq, k: 0 });
+    }
     if (inRace() && rsim) {
       rseq++;
       rpending.push([rseq, 0]);
@@ -321,7 +333,7 @@
 
   document.addEventListener('keydown', (e) => {
     if (!joined || chatting || !locked) return; // normal modda tuşlar siteye gitmez
-    const playing = inMatch() || inRace() || inVb();
+    const playing = inMatch() || inRace() || inVb() || inHk();
     if (KEYMAP[e.code] && playing) {
       e.preventDefault();
       keys.add(e.code);
@@ -338,7 +350,7 @@
         openChat();
         return;
       case 'KeyL':
-        if (myTeam() || myVTeam() || (lobby.racers || []).includes(myId)) send({ t: 'leave' });
+        if (myTeam() || myVTeam() || myHTeam() || (lobby.racers || []).includes(myId)) send({ t: 'leave' });
         return;
       case 'KeyE':
         openEmojiPanel();
@@ -570,16 +582,18 @@
         }
         break;
       case 'lobby': {
-        const wasIn = inMatch(), wasRace = inRace(), wasVb = inVb();
+        const wasIn = inMatch(), wasRace = inRace(), wasVb = inVb(), wasHk = inHk();
         lobby = m;
         document.body.classList.toggle('in-match', inMatch());
         document.body.classList.toggle('in-race', inRace());
         document.body.classList.toggle('in-vb', inVb());
+        document.body.classList.toggle('in-hk', inHk());
         if (!m.running) resetMatchView();
         if (!m.raceRunning) resetRaceView();
         if (!m.vRunning) resetVView();
+        if (!m.hRunning) resetHView();
         if (!wasVb && inVb()) resetAim();
-        if (wasIn !== inMatch() || wasRace !== inRace() || wasVb !== inVb()) {
+        if (wasIn !== inMatch() || wasRace !== inRace() || wasVb !== inVb() || wasHk !== inHk()) {
           flashKeys(); // maça/yarışa girince/çıkınca ilgili tuşları kısaca göster
           keys.clear(); // sadece kendi durumum değişince; başkası takım değiştirince tuşlarım bırakılmasın
         }
@@ -607,6 +621,37 @@
         lastSnapAt = now;
         onVSnapshot(m);
         break;
+      case 'hg':
+        lastSnapAt = now;
+        onHSnapshot(m);
+        break;
+      case 'hgoal': {
+        scores = m.scores || scores;
+        renderPlayerList();
+        if (!(inHk() || nearRink())) break;
+        const p = m.by != null ? players.get(m.by) : null;
+        const team = W.HK.teams[m.team];
+        const who = p ? (m.own ? `${p.name} (kendi kalesine)` : p.name) : team.name;
+        announce(`🏒 GOL! ${who}`, team.color, `${m.score.red} - ${m.score.blue}`);
+        SFX.goal();
+        break;
+      }
+      case 'hperiod':
+        if (inHk() || nearRink()) {
+          announce(`${m.period}. PERİYOT`, '#fff', 'Taraflar değişiyor');
+          SFX.whistle('half');
+        }
+        break;
+      case 'hend': {
+        if (!(inHk() || nearRink())) break;
+        const t = m.winner ? W.HK.teams[m.winner] : null;
+        if (m.reason === 'empty') announce('Maç bitti', '#fff', 'Tüm oyuncular sahadan ayrıldı');
+        else {
+          announce(t ? `${t.name} kazandı!` : 'Berabere!', t ? t.color : '#fff', `${m.score.red} - ${m.score.blue}`);
+          SFX.whistle('end');
+        }
+        break;
+      }
       case 'vpoint': {
         scores = m.scores || scores;
         renderPlayerList();
@@ -1746,6 +1791,446 @@
     el.classList.toggle('hidden', !g);
   }
 
+  // ---------- Buz hokeyi ----------
+  // Futboldaki tahmin sistemiyle aynı: istemci aynı fiziği çalıştırır, sunucu durumu gelince düzeltir
+  const HO = window.HOCKEY, HK = W.HK;
+  let hsim = null, hmeta = null, hacc = 0, hseq = 0, hpending = [], hprev = new Map();
+  const hoffsets = new Map();
+  let hDelay = 2;
+  const trails = new Map(); // oyuncu id -> paten izi noktaları (dünya koordinatı)
+
+  function inHk() {
+    return !!lobby.hRunning && myId != null && ((lobby.hred || []).includes(myId) || (lobby.hblue || []).includes(myId));
+  }
+  function myHTeam() {
+    return (lobby.hred || []).includes(myId) ? 'red' : (lobby.hblue || []).includes(myId) ? 'blue' : null;
+  }
+  function nearRink() {
+    const F = W.HFIELD, m = 200;
+    return cam.x + wvw > F.x - m && cam.x < F.x + F.w + m && cam.y + wvh > F.y - m && cam.y < F.y + F.h + m;
+  }
+  function resetHView() {
+    hsim = null;
+    hmeta = null;
+    hpending = [];
+    hoffsets.clear();
+    hprev = new Map();
+    hacc = 0;
+    trails.clear();
+  }
+  function hPositions() {
+    const m = new Map();
+    for (const p of hsim.players.values()) m.set(p.id, { x: p.x, y: p.y });
+    m.set('puck', { x: hsim.puck.x, y: hsim.puck.y });
+    return m;
+  }
+  function hStep(bits) {
+    hprev = hPositions();
+    if (bits != null) hsim.setInput(myId, bits);
+    hsim.step(true);
+  }
+  function hRender(alpha, noOffset) {
+    const out = new Map();
+    if (!hsim) return out;
+    for (const [id, c] of hPositions()) {
+      const p = hprev.get(id) || c;
+      const o = noOffset ? null : hoffsets.get(id);
+      out.set(id, {
+        x: p.x + (c.x - p.x) * alpha + (o ? o.x : 0),
+        y: p.y + (c.y - p.y) * alpha + (o ? o.y : 0),
+      });
+    }
+    return out;
+  }
+  function onHSnapshot(g) {
+    hmeta = g;
+    if (!lobby.hRunning) return;
+    if (!hsim) {
+      hsim = new HO.HMatch();
+      hsim.load(g);
+      hpending = [];
+      hprev = hPositions();
+      return;
+    }
+    const alpha = Math.min(1, hacc / TICK);
+    const before = hRender(alpha, true);
+    hsim.load(g);
+    const mine = g.p.find((q) => q[0] === myId);
+    if (mine) {
+      const ack = mine[8];
+      const want = Math.max(2, Math.min(3, mine[9] || 2));
+      if (want > hDelay) hDelay++;
+      else if (want < hDelay) hDelay--;
+      hpending = hpending.filter(([s]) => s > ack);
+      if (hpending.length > 90) hpending = hpending.slice(-90);
+      const upto = Math.max(0, hpending.length - hDelay);
+      for (let i = 0; i < upto; i++) hStep(hpending[i][1]);
+      if (!upto) hprev = hPositions();
+    } else {
+      hpending = [];
+      hprev = hPositions();
+    }
+    const after = hRender(alpha, true);
+    for (const [id, a] of after) {
+      const b = before.get(id);
+      if (!b) continue;
+      const o = hoffsets.get(id) || { x: 0, y: 0 };
+      o.x += b.x - a.x;
+      o.y += b.y - a.y;
+      if (Math.hypot(o.x, o.y) > 60) { o.x = 0; o.y = 0; }
+      hoffsets.set(id, o);
+    }
+  }
+  function advanceH(dt) {
+    if (!hsim) return;
+    const playing = inHk() && hsim.players.has(myId);
+    hacc += dt;
+    let steps = 0;
+    while (hacc >= TICK && steps < 6) {
+      hacc -= TICK;
+      steps++;
+      if (playing) {
+        const k = inputBits();
+        hseq++;
+        hpending.push([hseq, k]);
+        send({ t: 'hi', s: hseq, k });
+        puckSoundStep(() => hStep(hpending.length > hDelay ? hpending[hpending.length - 1 - hDelay][1] : null));
+      } else puckSoundStep(() => hStep(null));
+    }
+    if (steps === 6) hacc = 0;
+    const decay = Math.exp(-dt * 14);
+    for (const o of hoffsets.values()) { o.x *= decay; o.y *= decay; }
+  }
+
+  // Pak sesleri: şut, bant, direk, sopa/paten teması
+  let lastPuckSnd = 0, lastShotSnd = 0;
+  function puckSoundStep(step) {
+    const b = hsim.puck, vx0 = b.vx, vy0 = b.vy;
+    const ready = new Map();
+    for (const p of hsim.players.values()) ready.set(p.id, p.kickReady);
+    step();
+    const dv = Math.hypot(b.vx - vx0, b.vy - vy0);
+    if (dv < 0.4) return;
+    const t = performance.now();
+    let shot = false;
+    for (const p of hsim.players.values()) if (ready.get(p.id) && !p.kickReady) shot = true;
+    if (shot ? t - lastShotSnd < 150 : t - lastPuckSnd < 70) return;
+    const w = W.hkToWorld(b.x, b.y), sp = spatial(w.x, w.y);
+    if (!sp) return;
+    lastPuckSnd = t;
+    if (shot) {
+      lastShotSnd = t;
+      SFX.kick(sp.vol * Math.min(1, 0.6 + dv / 10), sp.pan);
+      return;
+    }
+    const k = sp.vol * Math.min(1, dv / 4);
+    for (const sx of [-HK.goalX, HK.goalX]) for (const sy of [-HK.goalW, HK.goalW]) {
+      if (Math.hypot(b.x - sx, b.y - sy) < HK.puck.radius + HK.postRadius + 2) { SFX.post(k, sp.pan); return; }
+    }
+    if (Math.abs(b.x) > HK.goalX && Math.abs(b.x) < HK.goalX + HK.goalD + 6 && Math.abs(b.y) < HK.goalW + 6) { SFX.net(k, sp.pan); return; }
+    for (const p of hsim.players.values()) {
+      if (Math.hypot(b.x - p.x, b.y - p.y) < p.radius + HK.puck.radius + 3) { SFX.touch(k, sp.pan); return; }
+    }
+    SFX.post(k * 0.7, sp.pan); // bant
+  }
+
+  // Saha zemini (bir kez çizilir)
+  const RINK_PAD = 30;
+  const rinkCanvas = (function () {
+    const S = HK.S, F = W.HFIELD;
+    const cv = document.createElement('canvas');
+    cv.width = F.w + RINK_PAD * 2;
+    cv.height = F.h + RINK_PAD * 2;
+    const c = cv.getContext('2d');
+    const ox = F.w / 2 + RINK_PAD, oy = F.h / 2 + RINK_PAD;
+    const X = (x) => ox + x * S, Y = (y) => oy + y * S;
+    const rinkPath = (grow) => roundRect(c, X(-HK.rinkX) - grow, Y(-HK.rinkY) - grow, F.w + grow * 2, F.h + grow * 2, HK.cornerR * S + grow);
+    // Bantlar
+    c.fillStyle = INK;
+    rinkPath(16);
+    c.fill();
+    c.fillStyle = '#f4f1ea';
+    rinkPath(11);
+    c.fill();
+    c.fillStyle = '#d6c34a';
+    rinkPath(4);
+    c.fill();
+    // Buz
+    const g = c.createLinearGradient(0, Y(-HK.rinkY), 0, Y(HK.rinkY));
+    g.addColorStop(0, '#eef9ff');
+    g.addColorStop(1, '#d4eefa');
+    c.fillStyle = g;
+    rinkPath(0);
+    c.fill();
+    c.save();
+    rinkPath(0);
+    c.clip();
+    // Buz parlaması ve çizikleri
+    const r = rng(77);
+    c.strokeStyle = 'rgba(255,255,255,0.9)';
+    c.lineWidth = 1.5;
+    for (let i = 0; i < 90; i++) {
+      const x = r() * cv.width, y = r() * cv.height, a = r() * Math.PI;
+      c.beginPath();
+      c.arc(x, y, 40 + r() * 140, a, a + 0.3 + r() * 0.6);
+      c.stroke();
+    }
+    c.strokeStyle = 'rgba(120,170,200,0.12)';
+    for (let i = 0; i < 60; i++) {
+      const x = r() * cv.width, y = r() * cv.height, a = r() * Math.PI;
+      c.beginPath();
+      c.arc(x, y, 30 + r() * 100, a, a + 0.3 + r() * 0.5);
+      c.stroke();
+    }
+    // Orta kırmızı çizgi, mavi çizgiler, kale çizgileri
+    c.fillStyle = 'rgba(214,52,52,0.75)';
+    c.fillRect(X(0) - 4, Y(-HK.rinkY), 8, F.h);
+    c.fillStyle = 'rgba(42,98,214,0.7)';
+    for (const s of [-1, 1]) c.fillRect(X(s * HK.blueLine) - 6, Y(-HK.rinkY), 12, F.h);
+    c.fillStyle = 'rgba(214,52,52,0.6)';
+    for (const s of [-1, 1]) c.fillRect(X(s * HK.goalX) - 1.5, Y(-HK.rinkY), 3, F.h);
+    // Orta daire ve başlama noktası
+    c.strokeStyle = 'rgba(42,98,214,0.7)';
+    c.lineWidth = 3;
+    c.beginPath();
+    c.arc(X(0), Y(0), HK.faceoffRadius * S, 0, Math.PI * 2);
+    c.stroke();
+    c.fillStyle = 'rgba(42,98,214,0.85)';
+    c.beginPath();
+    c.arc(X(0), Y(0), 6, 0, Math.PI * 2);
+    c.fill();
+    // Bölge daireleri
+    c.strokeStyle = 'rgba(214,52,52,0.55)';
+    for (const s of [-1, 1]) for (const t of [-1, 1]) {
+      const fx = s * (HK.goalX - 90), fy = t * 100;
+      c.beginPath();
+      c.arc(X(fx), Y(fy), 45 * S, 0, Math.PI * 2);
+      c.stroke();
+      c.fillStyle = 'rgba(214,52,52,0.7)';
+      c.beginPath();
+      c.arc(X(fx), Y(fy), 5, 0, Math.PI * 2);
+      c.fill();
+    }
+    // Kale önü (mavi yarım daire)
+    for (const s of [-1, 1]) {
+      c.fillStyle = 'rgba(90,170,240,0.35)';
+      c.strokeStyle = 'rgba(214,52,52,0.6)';
+      c.lineWidth = 2;
+      c.beginPath();
+      c.arc(X(s * HK.goalX), Y(0), 48 * S, s < 0 ? -Math.PI / 2 : Math.PI / 2, s < 0 ? Math.PI / 2 : Math.PI * 1.5);
+      c.closePath();
+      c.fill();
+      c.stroke();
+    }
+    c.restore();
+    return cv;
+  })();
+
+  function drawHPads() {
+    const P = W.HPADS;
+    if (!inView(P.start.x + 100, P.start.y, 500)) return;
+    const hover = joined && !inMatch() && !inRace() && !inVb() && !inHk() ? me : null;
+    const running = !!lobby.hRunning;
+    for (const [name, pad] of Object.entries(P)) {
+      let fill, title, lines;
+      if (name !== 'start') {
+        const t = HK.teams[name];
+        const ids = lobby['h' + name] || [];
+        fill = t.color;
+        title = (ids.includes(myId) ? '✓ ' : '') + `🏒 ${t.name}`;
+        lines = ids.map((id) => (players.get(id) || {}).name).filter(Boolean);
+        if (!lines.length) lines = ['(boş — tıkla, katıl)'];
+      } else {
+        const r = (lobby.hred || []).length, b = (lobby.hblue || []).length;
+        fill = running ? '#8a8a8a' : '#f0a93b';
+        title = !running ? '▶ Hokeyi Başlat' : isAdmin ? '⏹ Maçı Bitir' : '🏒 Maç sürüyor';
+        if (running) lines = [isAdmin ? 'Yönetici olarak bitir' : 'Sadece yönetici bitirebilir'];
+        else if (!r || !b) lines = ['Her takımda en az 1 kişi', `${r} - ${b}`];
+        else lines = [`${r} - ${b} oyuncu hazır · ${HK.periods}×${HK.periodSeconds} sn`];
+        if (!running && lobby.hLast) lines.push(`Son maç: ${lobby.hLast.score.red}-${lobby.hLast.score.blue}`);
+      }
+      padBox(pad, fill, title, lines, hover && W.inRect(hover.x, hover.y, pad));
+    }
+    ctx.fillStyle = 'rgba(59,47,36,0.75)';
+    ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('🏒 Buz Hokeyi · yön tuşlarıyla kay · Space şut · kalenin arkasından dolanabilirsin', HK.cx, P.start.y + P.start.h + 12);
+  }
+
+  // Paten izleri: kayan oyuncunun arkasında kısa süre kalan ince çizgiler
+  function updateTrails(hp, time) {
+    for (const [id, d] of hp) {
+      if (id === 'puck') continue;
+      const q = hsim.players.get(id);
+      if (!q) continue;
+      let tr = trails.get(id);
+      if (!tr) trails.set(id, (tr = []));
+      const w = W.hkToWorld(d.x, d.y);
+      const lastP = tr[tr.length - 1];
+      if (!lastP || Math.hypot(w.x - lastP.x, w.y - lastP.y) > 6) tr.push({ x: w.x, y: w.y, t: time });
+      while (tr.length && time - tr[0].t > 1600) tr.shift();
+    }
+    for (const id of [...trails.keys()]) if (!hp.has(id)) trails.delete(id);
+  }
+  function drawTrails(time) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 2;
+    for (const tr of trails.values()) {
+      for (let i = 1; i < tr.length; i++) {
+        const a = tr[i - 1], b = tr[i];
+        if (Math.hypot(b.x - a.x, b.y - a.y) > 60) continue; // ışınlanma (gol sonrası)
+        const k = 1 - (time - b.t) / 1600;
+        if (k <= 0) continue;
+        ctx.strokeStyle = `rgba(150,190,215,${0.55 * k})`;
+        const nx = -(b.y - a.y), ny = b.x - a.x, nl = Math.hypot(nx, ny) || 1;
+        for (const s of [-5, 5]) {
+          ctx.beginPath();
+          ctx.moveTo(a.x + (nx / nl) * s, a.y + (ny / nl) * s);
+          ctx.lineTo(b.x + (nx / nl) * s, b.y + (ny / nl) * s);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawNet(side, team) {
+    const S = HK.S;
+    const x0 = HK.cx + side * HK.goalX * S, x1 = HK.cx + side * (HK.goalX + HK.goalD) * S;
+    const y0 = HK.cy - HK.goalW * S, y1 = HK.cy + HK.goalW * S;
+    ctx.save();
+    // Ağ
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillRect(Math.min(x0, x1), y0, Math.abs(x1 - x0), y1 - y0);
+    ctx.strokeStyle = 'rgba(80,80,80,0.35)';
+    ctx.lineWidth = 1;
+    for (let y = y0 + 6; y < y1; y += 6) {
+      ctx.beginPath();
+      ctx.moveTo(x0, y);
+      ctx.lineTo(x1, y);
+      ctx.stroke();
+    }
+    for (let k = 1; k < 5; k++) {
+      const x = x0 + ((x1 - x0) * k) / 5;
+      ctx.beginPath();
+      ctx.moveTo(x, y0);
+      ctx.lineTo(x, y1);
+      ctx.stroke();
+    }
+    // Çerçeve (takım rengi)
+    ctx.strokeStyle = HK.teams[team].color;
+    ctx.lineWidth = 4;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y0);
+    ctx.lineTo(x1, y1);
+    ctx.lineTo(x0, y1);
+    ctx.stroke();
+    ctx.fillStyle = '#c62828';
+    for (const y of [y0, y1]) {
+      ctx.beginPath();
+      ctx.arc(x0, y, HK.postRadius * S + 1.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  let puckPos = null; // mini harita için
+  function drawHockey(time, hp) {
+    if (!inView(HK.cx, HK.cy, 1300)) return;
+    const F = W.HFIELD;
+    ctx.drawImage(rinkCanvas, F.x - RINK_PAD, F.y - RINK_PAD);
+    drawHPads();
+    const per = hsim ? hsim.period : 1;
+    for (const team of ['red', 'blue']) {
+      const side = (team === 'red' ? -1 : 1) * (per % 2 === 0 ? -1 : 1);
+      drawNet(side, team);
+    }
+    if (!hp || !hsim) return;
+    updateTrails(hp, time);
+    drawTrails(time);
+    const S = HK.S;
+    // Pak: küçük siyah disk, hafif gölge
+    const b = hp.get('puck');
+    const bw = W.hkToWorld(b.x, b.y);
+    puckPos = bw;
+    for (const [id, d] of hp) {
+      if (id === 'puck') continue;
+      const q = hsim.players.get(id);
+      if (!q) continue;
+      drawDisc(players.get(id), W.hkToWorld(d.x, d.y), q, id === myId, time, HK.player.radius * S, HK.teams);
+    }
+    ctx.fillStyle = 'rgba(40,60,80,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(bw.x + 2, bw.y + 3, HK.puck.radius * S, HK.puck.radius * S * 0.7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.arc(bw.x, bw.y, HK.puck.radius * S, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#555';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(bw.x, bw.y, HK.puck.radius * S - 2, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  let lastHPhase = null, lastHCount = 0;
+  function drawHOverlay() {
+    const ph = lobby.hRunning && hmeta ? hmeta.ph : null;
+    const near = inHk() || nearRink();
+    if (ph !== lastHPhase) {
+      if (lastHPhase === 'countdown' && ph === 'faceoff' && near) {
+        announce('BAŞLA!', '#fff', `${hmeta.per}. Periyot`);
+        SFX.whistle('start');
+      }
+      lastHPhase = ph;
+    }
+    if (ph !== 'countdown' || !near) { lastHCount = 0; return; }
+    const n = Math.max(1, Math.ceil(hmeta.tmr / HO.TPS));
+    if (n !== lastHCount) SFX.beep();
+    lastHCount = n;
+    ctx.save();
+    ctx.font = '900 120px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = INK;
+    ctx.fillStyle = '#fff';
+    ctx.strokeText(String(n), vw / 2, vh * 0.4);
+    ctx.fillText(String(n), vw / 2, vh * 0.4);
+    ctx.font = '800 22px Nunito, Trebuchet MS, sans-serif';
+    ctx.lineWidth = 5;
+    const sub = `${hmeta.per}. periyot başlıyor`;
+    ctx.strokeText(sub, vw / 2, vh * 0.4 + 80);
+    ctx.fillText(sub, vw / 2, vh * 0.4 + 80);
+    ctx.restore();
+  }
+
+  let hHudKey = '';
+  function updateHHud() {
+    const g = lobby.hRunning && hmeta && (inHk() || nearRink()) ? hmeta : null;
+    let key = 'off';
+    if (g) {
+      const left = Math.max(0, HK.periodSeconds - Math.floor(g.tk / HO.TPS));
+      const mm = String(Math.floor(left / 60)).padStart(2, '0');
+      const ss = String(left % 60).padStart(2, '0');
+      key = [g.s[0], g.s[1], g.per, mm, ss].join('|');
+      if (key !== hHudKey) {
+        $('hRed').textContent = g.s[0];
+        $('hBlue').textContent = g.s[1];
+        $('hPer').textContent = `${g.per}. Periyot`;
+        $('hTime').textContent = `${mm}:${ss}`;
+      }
+    }
+    if (key === hHudKey) return;
+    hHudKey = key;
+    $('hscore').classList.toggle('hidden', !g);
+  }
+
   // ---------- Ping göstergesi ----------
   let rttMs = null, lastPongAt = 0, lastSnapAt = 0, pingKey = '';
   setInterval(() => {
@@ -1755,7 +2240,7 @@
     if (!joined) return;
     const now = performance.now();
     // Maçta/yarışta 0.4 sn'den uzun durum gelmezse ya da ping cevabı 5 sn gecikirse bağlantı zayıf
-    const playing = (inMatch() && sim) || (inRace() && rsim) || (inVb() && vsim);
+    const playing = (inMatch() && sim) || (inRace() && rsim) || (inVb() && vsim) || (inHk() && hsim);
     const weak = !connected || (playing && now - lastSnapAt > 400) || (lastPongAt && now - lastPongAt > 5000);
     const ms = rttMs == null ? null : Math.round(rttMs);
     const cls = weak ? 'bad weak' : ms == null ? '' : ms < 80 ? 'good' : ms < 150 ? 'ok' : 'bad';
@@ -1955,6 +2440,7 @@
       advance: (dt) => advanceSim(dt),
       get rp() { return lastRp; },
       get rr() { return lastRr; }, get rsim() { return rsim; }, get rpending() { return rpending; },
+      get hsim() { return hsim; }, get hpending() { return hpending; },
       get vsim() { return vsim; }, get vpending() { return vpending; }, aim, setMouse: (b) => { mouseBits = b; }, get bits() { return inputBits(); },
       startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
       get stats() { return corrStats; },
@@ -2052,7 +2538,7 @@
       return;
     }
     // --- Arazi: su, çamur, buz ---
-    const onFoot = !inMatch() && !inRace() && !inVb();
+    const onFoot = !inMatch() && !inRace() && !inVb() && !inHk();
     const kind = onFoot ? W.terrainAt(me.x, me.y).kind : null;
     const moved = aPrev ? Math.hypot(me.x - aPrev.x, me.y - aPrev.y) : 0;
     aPrev = { x: me.x, y: me.y };
@@ -2069,7 +2555,9 @@
     lastKind = kind;
     SFX.loop('water').set(water ? Math.min(1, aSpeed / 350) : 0);
     SFX.loop('mud').set(kind === 'mud' ? Math.min(1, aSpeed / 160) : 0);
-    SFX.loop('ice').set(kind === 'ice' ? Math.min(1, aSpeed / 700) : 0);
+    // Hokeyde kendi diskinin hızına göre paten sesi
+    const skate = inHk() && hsim && hsim.players.get(myId);
+    SFX.loop('ice').set(skate ? Math.min(1, Math.hypot(skate.vx, skate.vy) / 4) : kind === 'ice' ? Math.min(1, aSpeed / 700) : 0);
     // Uzaktan nehir/göl uğultusu: kameranın suya uzaklığına göre
     const cx = cam.x + wvw / 2, cy = cam.y + wvh / 2;
     let amb = 0;
@@ -2084,7 +2572,8 @@
     // Maç sırasında tribün uğultusu
     const fsp = lobby.running ? spatial(H.cx, H.cy, 1.6) : null;
     const vsp = lobby.vRunning ? spatial(VB.cx, VB.cy, 1.6) : null;
-    SFX.loop('crowd').set(Math.max(fsp ? (inMatch() ? 1 : fsp.vol) : 0, vsp ? (inVb() ? 1 : vsp.vol) : 0));
+    const hsp = lobby.hRunning ? spatial(HK.cx, HK.cy, 1.6) : null;
+    SFX.loop('crowd').set(Math.max(fsp ? (inMatch() ? 1 : fsp.vol) : 0, vsp ? (inVb() ? 1 : vsp.vol) : 0, hsp ? (inHk() ? 1 : hsp.vol) : 0));
 
     // --- Yarış: V8 motorlar, lastik, kerb, çim ---
     const want = new Map();
@@ -2157,7 +2646,8 @@
     if (me.y > W.H) { me.y = W.H; me.vy = 0; }
     // Maç sürerken seyirciler sahaya giremez: en yakın kenara itilir
     const fence = lobby.running && W.inRect(me.x, me.y, W.FIELD) ? W.FIELD
-      : lobby.vRunning && W.inRect(me.x, me.y, W.VFIELD) ? W.VFIELD : null;
+      : lobby.vRunning && W.inRect(me.x, me.y, W.VFIELD) ? W.VFIELD
+      : lobby.hRunning && W.inRect(me.x, me.y, W.HFIELD) ? W.HFIELD : null;
     if (fence) {
       const F = fence, m = 2;
       const d = [me.x - F.x, F.x + F.w - me.x, me.y - F.y, F.y + F.h - me.y];
@@ -2267,43 +2757,6 @@
       c.ellipse(x, y, 8 + r() * 22, 5 + r() * 12, r() * 3, 0, Math.PI * 2);
       c.fill();
     }
-
-    // Buz pisti
-    const I = W.ICE;
-    c.fillStyle = INK;
-    roundRect(c, I.x - 12, I.y - 12, I.w + 24, I.h + 24, 60);
-    c.fill();
-    c.fillStyle = '#ffffff';
-    roundRect(c, I.x - 8, I.y - 8, I.w + 16, I.h + 16, 56);
-    c.fill();
-    const ig = c.createLinearGradient(I.x, I.y, I.x + I.w, I.y + I.h);
-    ig.addColorStop(0, '#dff4ff');
-    ig.addColorStop(1, '#b9e3f7');
-    c.fillStyle = ig;
-    roundRect(c, I.x, I.y, I.w, I.h, 50);
-    c.fill();
-    c.save();
-    roundRect(c, I.x, I.y, I.w, I.h, 50);
-    c.clip();
-    c.strokeStyle = 'rgba(255,255,255,0.8)';
-    c.lineWidth = 2;
-    for (let i = 0; i < 40; i++) {
-      const x = I.x + r() * I.w, y = I.y + r() * I.h, a = r() * Math.PI;
-      c.beginPath();
-      c.arc(x, y, 30 + r() * 80, a, a + 0.6 + r());
-      c.stroke();
-    }
-    c.strokeStyle = 'rgba(220,60,60,0.5)';
-    c.lineWidth = 4;
-    c.beginPath();
-    c.moveTo(I.x + I.w / 2, I.y);
-    c.lineTo(I.x + I.w / 2, I.y + I.h);
-    c.stroke();
-    c.strokeStyle = 'rgba(60,110,220,0.45)';
-    c.beginPath();
-    c.arc(I.x + I.w / 2, I.y + I.h / 2, 60, 0, Math.PI * 2);
-    c.stroke();
-    c.restore();
 
     // HaxBall "Classic" stadyumu
     const F = W.FIELD, S = H.S;
@@ -2446,6 +2899,11 @@
     c.strokeStyle = '#fff';
     c.lineWidth = 14;
     c.strokeRect(W.VB.cx - W.VB.courtX * W.VB.S, W.VB.cy - W.VB.courtY * W.VB.S, W.VB.courtX * 2 * W.VB.S, W.VB.courtY * 2 * W.VB.S);
+    c.fillStyle = '#d4eefa';
+    roundRect(c, W.HFIELD.x, W.HFIELD.y, W.HFIELD.w, W.HFIELD.h, W.HK.cornerR * W.HK.S);
+    c.fill();
+    c.strokeStyle = '#fff';
+    c.stroke();
     c.fillStyle = '#555';
     c.fillRect(W.VB.cx - 6, W.VB.cy - W.VB.netHalf * W.VB.S, 12, W.VB.netHalf * 2 * W.VB.S);
     c.fillStyle = '#5ab4e5';
@@ -2798,6 +3256,12 @@
     ctx.arc(x0 + ball.x * MM_S, y0 + ball.y * MM_S, 2.5, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
+    if (hsim && puckPos) {
+      ctx.fillStyle = '#111';
+      ctx.beginPath();
+      ctx.arc(x0 + puckPos.x * MM_S, y0 + puckPos.y * MM_S, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
     if (vsim) {
       const vb = W.vbToWorld(vsim.ball.x, vsim.ball.y);
       ctx.fillStyle = '#ffe066';
@@ -2849,7 +3313,7 @@
         if (id === 'ball') continue;
         const q = sim.players.get(id);
         if (!q) continue;
-        drawDisc(players.get(id), W.toWorld(d.x, d.y), q, id === myId, time);
+        drawDisc(players.get(id), W.toWorld(d.x, d.y), q, id === myId, time, H.player.radius * H.S, H.teams);
       }
       const b = rp.get('ball');
       bpos = W.toWorld(b.x, b.y);
@@ -2866,9 +3330,9 @@
     ctx.stroke();
   }
 
-  function drawDisc(pl, d, q, isMe, time) {
-    const S = H.S, r = H.player.radius * S;
-    ctx.fillStyle = H.teams[q.team].color;
+  function drawDisc(pl, d, q, isMe, time, r, teams) {
+    const S = H.S;
+    ctx.fillStyle = teams[q.team].color;
     ctx.beginPath();
     ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
     ctx.fill();
@@ -3010,6 +3474,7 @@
     advanceSim(dt);
     advanceRace(dt);
     advanceV(dt);
+    advanceH(dt);
     vHitSound();
     const rp = sim ? renderPositions(Math.min(1, simAcc / TICK)) : null;
     lastRp = rp;
@@ -3019,6 +3484,8 @@
     const myCar = inRace() && rr ? rr.get(myId) : null;
     const vp = vsim ? vRender(Math.min(1, vacc / TICK)) : null;
     const myV = inVb() && vp ? vp.get(myId) : null;
+    const hp = hsim ? hRender(Math.min(1, hacc / TICK)) : null;
+    const myH = inHk() && hp ? hp.get(myId) : null;
     camLead.x *= 0.9;
     camLead.y *= 0.9;
     if (myDisc) {
@@ -3045,7 +3512,19 @@
       inAx = inAy = 0;
       camLead.x = (aim.x - myV.x) * VB.S * 0.35;
       camLead.y = (aim.y - myV.y) * VB.S * 0.35;
-    } else if (joined && !inMatch() && !inRace() && !inVb()) stepMovement(dt);
+    } else if (myH) {
+      // Hokeyde kamera kayış yönüne biraz önden bakar
+      const w = W.hkToWorld(myH.x, myH.y);
+      me.x = w.x;
+      me.y = w.y;
+      me.vx = me.vy = 0;
+      inAx = inAy = 0;
+      const q = hsim.players.get(myId);
+      if (q) {
+        camLead.x = q.vx * HK.S * 25;
+        camLead.y = q.vy * HK.S * 25;
+      }
+    } else if (joined && !inMatch() && !inRace() && !inVb() && !inHk()) stepMovement(dt);
     // Yakınlaştırma yumuşak geçer; görünen alan değişirken kamera merkezi sabit kalsın
     const targetZoom = myCar ? RACE_ZOOM : 1;
     if (Math.abs(targetZoom - zoom) > 0.001) {
@@ -3077,16 +3556,17 @@
     drawMatch(time, rp);
     drawRace(time, rr);
     drawVolley(time, vp);
+    drawHockey(time, hp);
 
     const rt = time - INTERP_DELAY;
     for (const p of players.values()) {
       if (p.id === myId) continue;
       p.render = interp(p.snaps, rt);
-      if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && !(vsim && vsim.players.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
+      if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && !(vsim && vsim.players.has(p.id)) && !(hsim && hsim.players.has(p.id)) && inView(p.render.x, p.render.y, 200)) {
         drawCursor(p, p.render.x, p.render.y, time, false);
       }
     }
-    if (joined && !myDisc && !myCar && !myV) {
+    if (joined && !myDisc && !myCar && !myV && !myH) {
       const self = players.get(myId) || { name: me.name, color: me.color, skin: me.skin };
       drawCursor(self, me.x, me.y, time, true);
     }
@@ -3095,9 +3575,11 @@
     if (joined) drawMinimap();
     drawOverlay();
     drawVOverlay();
+    drawHOverlay();
     drawStartLights();
     updateHud();
     updateVHud();
+    updateHHud();
     updateRaceHud();
     updatePing();
     requestAnimationFrame(frame);

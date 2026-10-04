@@ -28,7 +28,7 @@
   const HALF = ROAD_W / 2;
   const KERB_W = 12;
   const RUNOFF = 50; // yol kenarından lastik bariyerine kadar çim/kaçış alanı
-  const ORIGIN = { x: 3150, y: 120 }; // pistin dünyadaki sol üst köşesi (gölün ve buz pistinin sağı)
+  const ORIGIN = { x: 4500, y: 120 }; // pistin dünyadaki sol üst köşesi (hokey sahasının sağı)
 
   // Catmull-Rom ile kapalı eğri, sonra düzgün aralıklarla yeniden örnekleme
   function catmull(pts, perSeg) {
