@@ -169,8 +169,6 @@ function volley(m, me) {
         } else {
           ax = -s * V.courtX * (0.45 + Math.random() * 0.35);
           ay = rnd() * V.courtY * 0.7;
-          // Arada riskli sert vuruş: dışarı da gidebilir, ralliler sonsuza kadar sürmesin
-          if (Math.random() < 0.3) bits = (bits & ~KICK) | SPIKE;
         }
       }
     }

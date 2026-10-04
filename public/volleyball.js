@@ -22,15 +22,14 @@
   // Vuruş türleri: uçuş süresi (tick) = t0 + tk × mesafe; sapma (elips yarı eksenleri) = taban + k × mesafe.
   // bias: sapmanın vuruş yönünde ileri kayması (sert vuruş uzun kaçar)
   const SHOTS = {
-    pass: { t0: 56, tk: 0.12, along: 6, alongK: 0.045, lat: 5, latK: 0.03, bias: 0.1 },
-    serve: { t0: 58, tk: 0.11, along: 12, alongK: 0.05, lat: 9, latK: 0.03, bias: 0.15 },
-    drive: { t0: 26, tk: 0.07, along: 20, alongK: 0.075, lat: 11, latK: 0.035, bias: 0.3 },
-    spike: { t0: 14, tk: 0.045, along: 24, alongK: 0.09, lat: 11, latK: 0.04, bias: 0.35 },
+    // Alanlar büyütüldü; servis en büyük ve özellikle yana kaçabilir (köşeye atılan servis dışarı gidebilsin)
+    pass: { t0: 56, tk: 0.12, along: 9, alongK: 0.06, lat: 8, latK: 0.045, bias: 0.1 },
+    serve: { t0: 58, tk: 0.11, along: 24, alongK: 0.085, lat: 26, latK: 0.075, bias: 0.1 },
+    spike: { t0: 14, tk: 0.045, along: 28, alongK: 0.1, lat: 14, latK: 0.05, bias: 0.3 },
   };
   // Topa değilebilecek yükseklik aralığı ve ideal aralık (zamanlama)
   const WINDOW = {
     pass: { min: 0, max: 62, lo: 6, hi: 36, soft: 26 },
-    drive: { min: 0, max: 76, lo: 6, hi: 44, soft: 26 },
     spike: { min: 34, max: 78, lo: 44, hi: 66, soft: 14 },
   };
 
@@ -213,7 +212,7 @@
           if (!pass && !hard) sp.ready = true;
           else if (sp.ready) {
             sp.ready = false;
-            this.hit(sp, hard ? 'drive' : 'serve', ev, true);
+            this.hit(sp, 'serve', ev, true); // sert servis yok: iki tuş da normal servis
             served = true;
           }
         }
@@ -284,10 +283,10 @@
       }
     }
 
-    // Bir oyuncunun vuruş türü: sağ tık/Shift smaç (şartlar uymazsa sert vuruş), sol tık/Space pas
+    // Bir oyuncunun vuruş türü: sağ tık smaç (şartlar uymazsa hiçbir şey olmaz; sert vuruş kaldırıldı), sol tık/Space pas
     shotKind(p, z) {
-      if (p.input & INPUT.SPIKE) return this.canSpike(p, z) ? 'spike' : 'drive';
       if (p.input & INPUT.PASS) return 'pass';
+      if (p.input & INPUT.SPIKE && this.canSpike(p, z)) return 'spike';
       return null;
     }
 
@@ -384,11 +383,10 @@
         goodSet: kind === 'spike' && this.goodSet,
         dive: p.dashT > 0,
       });
-      // Üçgen dağılım: çoğu vuruş merkeze yakın, azı kenara
-      const u = rnd(this.tick, p.id, 1) + rnd(this.tick, p.id, 2) - 1;
-      const v = rnd(this.tick, p.id, 3) + rnd(this.tick, p.id, 4) - 1;
+      // Ekrandaki elipsin içinde eşit olasılıkla rastgele bir nokta (kenarlar da merkez kadar olası)
+      const rr = Math.sqrt(rnd(this.tick, p.id, 1)), th = rnd(this.tick, p.id, 2) * Math.PI * 2;
       const fx = dx / dist, fy = dy / dist;
-      const along = sp.along * (u + sp.bias), lat = sp.lat * v;
+      const along = sp.along * (rr * Math.cos(th) + sp.bias), lat = sp.lat * rr * Math.sin(th);
       const lx = tx + fx * along - fy * lat, ly = ty + fy * along + fx * lat;
       const sh = SHOTS[kind];
       const T = Math.max(10, Math.round(sh.t0 + sh.tk * Math.hypot(lx - b.x, ly - b.y)));

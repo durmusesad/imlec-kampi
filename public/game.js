@@ -1668,10 +1668,9 @@
       const base = { speed: Math.hypot(q.vx, q.vy), incoming: first && !serving ? Math.hypot(ball.vx, ball.vy, ball.vz) : 0 };
       const passKind = serving ? 'serve' : 'pass';
       const canSp = !serving && vsim.canSpike({ ...q, ax: aim.x }, Math.max(ball.z, VO.WINDOW.spike.min));
-      const hardKind = canSp ? 'spike' : 'drive';
       drawSpread(ball.x, ball.y, aim.x, aim.y, VO.spread(passKind, dist, base), 'rgba(255,255,255,A)');
-      drawSpread(ball.x, ball.y, aim.x, aim.y, VO.spread(hardKind, dist, { ...base, goodSet: canSp && vsim.goodSet }),
-        canSp ? 'rgba(255,80,40,A)' : 'rgba(255,190,60,A)');
+      // Smaç alanı sadece smaç atılabilecekken görünür (sert vuruş kaldırıldı)
+      if (canSp) drawSpread(ball.x, ball.y, aim.x, aim.y, VO.spread('spike', dist, { ...base, goodSet: vsim.goodSet }), 'rgba(255,80,40,A)');
       const aw = W.vbToWorld(aim.x, aim.y), mw = W.vbToWorld(q.x, q.y);
       ctx.strokeStyle = 'rgba(255,255,255,0.35)';
       ctx.lineWidth = 1.5;
@@ -1695,7 +1694,7 @@
       ctx.textBaseline = 'middle';
       ctx.lineWidth = 3;
       ctx.strokeStyle = 'rgba(0,0,0,0.6)';
-      const label = serving ? 'sol: servis · sağ: sert servis' : canSp ? 'SMAÇ hazır (sağ tık)' : '';
+      const label = serving ? 'servis: sol tık / Space' : canSp ? 'SMAÇ hazır (sağ tık)' : '';
       if (label) {
         ctx.strokeText(label, aw.x + 18, aw.y - 14);
         ctx.fillStyle = canSp ? '#ff9a7a' : '#fff';
