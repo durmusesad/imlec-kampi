@@ -270,8 +270,13 @@
       for (const t of this.players.values()) {
         if (!t.alive) continue;
         const k = t.input;
+        const turn = ((k & INPUT.RIGHT) ? 1 : 0) - ((k & INPUT.LEFT) ? 1 : 0);
         if (t.plant > 0) {
-          // Mayın kuruluyor: F basılı kaldıkça bar dolar (3 sn), erken bırakılırsa iptal; bu sürede tank kıpırdamaz
+          // Mayın kuruluyor: F basılı kaldıkça bar dolar (3 sn), erken bırakılırsa iptal.
+          // Bu sürede tank yerinden oynamaz ve ateş edemez ama dönebilir (mayın koyduğu belli olmasın)
+          t.a += turn * T.rot * (inMud(map, t.x, t.y) ? T.mudRot : 1);
+          if (t.a > Math.PI) t.a -= Math.PI * 2;
+          if (t.a < -Math.PI) t.a += Math.PI * 2;
           if (!(k & INPUT.MINE)) {
             t.plant = 0;
             t.mineReady = true;
@@ -284,23 +289,24 @@
           }
         } else {
           const mud = inMud(map, t.x, t.y);
-          const turn = ((k & INPUT.RIGHT) ? 1 : 0) - ((k & INPUT.LEFT) ? 1 : 0);
           t.a += turn * T.rot * (mud ? T.mudRot : 1);
           if (t.a > Math.PI) t.a -= Math.PI * 2;
           if (t.a < -Math.PI) t.a += Math.PI * 2;
-          const mv = (k & INPUT.UP ? T.speed : 0) - (k & INPUT.DOWN ? T.backSpeed : 0);
+          // Mayın: F basılınca kurulum başlar; o andan itibaren tank yerinden oynamaz
+          if (k & INPUT.MINE && t.mineReady && t.minesLeft > 0 && this.phase === 'play') t.plant = 1;
+          if (!(k & INPUT.MINE)) t.mineReady = true;
+          const mv = t.plant ? 0 : (k & INPUT.UP ? T.speed : 0) - (k & INPUT.DOWN ? T.backSpeed : 0);
           if (mv) {
             const sp = mv * (mud ? T.mud : 1);
             t.x += Math.cos(t.a) * sp;
             t.y += Math.sin(t.a) * sp;
           }
           for (let i = 0; i < 2; i++) for (const w of map.near[cellOf(t.x, t.y)]) pushOut(t, T.tankR, w);
-          // Mayın: F basılı tutulunca kurulum başlar (tank kıpırdamaz)
-          if (k & INPUT.MINE && t.mineReady && t.minesLeft > 0 && this.phase === 'play') t.plant = 1;
-          if (!(k & INPUT.MINE)) t.mineReady = true;
         }
-        // Ateş: her basışta bir mermi, aynı anda en fazla 5
-        if (k & INPUT.FIRE) {
+        // Ateş: her basışta bir mermi, aynı anda en fazla 5 (mayın kurarken ateş yok)
+        if (t.plant > 0) {
+          if (!(k & INPUT.FIRE)) t.fireReady = true;
+        } else if (k & INPUT.FIRE) {
           if (t.fireReady && this.bullets.filter((b) => b.owner === t.id).length < T.maxBullets) {
             const dx = Math.cos(t.a), dy = Math.sin(t.a);
             const b = { id: this.nextId++, owner: t.id, x: t.x + dx * (T.tankR + 5), y: t.y + dy * (T.tankR + 5), vx: dx * T.bulletSpeed, vy: dy * T.bulletSpeed, dist: 0 };
