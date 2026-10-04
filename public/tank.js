@@ -407,12 +407,17 @@
       return [...this.score.entries()].sort((a, b) => b[1] - a[1]).map(([id, s]) => ({ id, s }));
     }
 
-    snapshot(acks) {
+    // viewer: bu durumu alan oyuncu. Başkalarının mayın kurduğu (bar, kalan hak, F tuşu) ona gösterilmez;
+    // kurulum sürerken o tank sadece dönüyormuş gibi görünür (gidiş/ateş tuşları da gizlenir, tahmin ele vermesin)
+    snapshot(acks, viewer) {
       const r = (v) => Math.round(v * 1000) / 1000;
       const t = [];
       for (const q of this.players.values()) {
         const [ack, buf] = acks ? acks(q.id) : [0, 2];
-        t.push([q.id, r(q.x), r(q.y), r(q.a), q.input, q.alive ? 1 : 0, (q.fireReady ? 1 : 0) | (q.mineReady ? 2 : 0), q.plant, q.minesLeft, ack, buf]);
+        const own = q.id === viewer;
+        const input = own ? q.input : q.plant > 0 ? q.input & (INPUT.LEFT | INPUT.RIGHT) : q.input & ~INPUT.MINE;
+        t.push([q.id, r(q.x), r(q.y), r(q.a), input, q.alive ? 1 : 0, (q.fireReady ? 1 : 0) | (q.mineReady ? 2 : 0),
+          own ? q.plant : 0, own ? q.minesLeft : T.mines, ack, buf]);
       }
       return {
         n: this.tick, ph: this.phase, tmr: this.timer, rd: this.round, seed: this.seed, nid: this.nextId,

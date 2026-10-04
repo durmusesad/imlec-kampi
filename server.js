@@ -734,20 +734,19 @@ function tackOf(id) {
   return c ? [c.ack, c.buf] : [0, 2];
 }
 
-// Mayınlar sadece sahibine gider: her oyuncuya kendi mayınlarını ekleyerek gönder
+// Mayın bilgisi sadece sahibine gider: kurulan mayınlar, kurulum barı ve kalan hak.
+// İzleyiciler herkesin gizli halini alır; tank oyuncularına kendi gerçek durumları eklenir
 function broadcastTMatch() {
   if (!tmatch) return;
   const F = WORLD.TFIELD, M = 1200;
-  const base = { t: 'tg', ...tmatch.snapshot(tackOf) };
-  const data = JSON.stringify(base);
-  const far = base.n % 15 === 0;
+  const pub = JSON.stringify({ t: 'tg', ...tmatch.snapshot(tackOf, null) });
+  const far = tmatch.tick % 15 === 0;
   for (const p of players.values()) {
     const ws = p.ws;
     if (!ws || ws.readyState !== 1 || ws.bufferedAmount > FRESH_MAX_BUFFER) continue;
     const mine = tmatch.players.has(p.id);
     if (!mine && !far && !(p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M)) continue;
-    const mn = mine ? tmatch.minesOf(p.id) : null;
-    ws.send(mn && mn.length ? JSON.stringify({ ...base, mn }) : data);
+    ws.send(mine ? JSON.stringify({ t: 'tg', ...tmatch.snapshot(tackOf, p.id), mn: tmatch.minesOf(p.id) }) : pub);
   }
 }
 
@@ -957,7 +956,7 @@ wss.on('connection', (ws) => {
       if (match) send(ws, { t: 'g', ...match.snapshot(ackOf) });
       if (vmatch) send(ws, { t: 'vg', ...vmatch.snapshot(vackOf) });
       if (hmatch) send(ws, { t: 'hg', ...hmatch.snapshot(hackOf) });
-      if (tmatch) send(ws, { t: 'tg', ...tmatch.snapshot(tackOf), mn: tmatch.minesOf(me.id) });
+      if (tmatch) send(ws, { t: 'tg', ...tmatch.snapshot(tackOf, me.id), mn: tmatch.minesOf(me.id) });
       if (race) broadcastRace();
       broadcast({ t: 'join', p: publicPlayer(me) }, me.id); // geri dönende isim/renk değişmiş olabilir
       return;
