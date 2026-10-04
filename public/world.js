@@ -131,7 +131,7 @@
 
   // Tank oyunu (AZ Tank benzeri): buz pistinin altında labirent. Koordinatlar arena içinde piksel (sol üst 0,0)
   const TK = {
-    x: 2725, y: 1300, cols: 15, rows: 8, cell: 90, wall: 7,
+    x: 2300, y: 2430, cols: 15, rows: 8, cell: 90, wall: 7, // voleybolun sağı, üst kenarla aynı hizada
     tankR: 17, speed: 2.1, backSpeed: 1.5, rot: 0.055, // px/tick, rad/tick
     bulletR: 4, bulletSpeed: 4.2, range: 2520, // menzil: 2520 px / 4.2 px/tick = 600 tick = 10 sn
     maxBullets: 5, grace: 24, // kendi merminin sahibine zarar vermeden alacağı yol (namludan çıkış)
