@@ -145,9 +145,85 @@
   function updateModeUi() {
     document.body.classList.toggle('normal', joined && !locked);
     $('adminBar').classList.toggle('hidden', !joined || kicked);
-    // Oyun durdu: tuş tablosunun tamamı ekranın ortasında görünür (emoji paneli açıkken değil)
-    document.body.classList.toggle('paused', joined && !locked && $('emojiPanel').classList.contains('hidden'));
+    // Oyun durdu: ortada oyun menüsü (emoji paneli açıkken değil); her açılışta ana sayfadan başlar
+    const paused = joined && !locked && $('emojiPanel').classList.contains('hidden');
+    if (paused && !document.body.classList.contains('paused')) menuShow('main');
+    document.body.classList.toggle('paused', paused);
     sendStatus();
+  }
+
+  // ---------- Oyun menüsü ----------
+  function menuShow(v) {
+    document.querySelectorAll('#menu .mview').forEach((el) => el.classList.toggle('hidden', el.dataset.v !== v));
+    $('menuCard').classList.toggle('wide', v === 'controls');
+    if (v === 'controls') buildControls();
+    if (v === 'sound') syncSoundUi();
+  }
+  $('mResume').onclick = () => { SFX.init(); requestLock(); };
+  $('mEmoji').onclick = () => openEmojiPanel();
+  document.querySelectorAll('#menu [data-go]').forEach((b) => (b.onclick = () => menuShow(b.dataset.go)));
+  document.querySelectorAll('#menu .mback').forEach((b) => (b.onclick = () => menuShow('main')));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('paused')) menuShow('main');
+  });
+  // Kontroller: tuş rehberindeki bölümler sekme sekme; açılışta şu an oynanan oyunun sekmesi seçili
+  let ctrlSel = null;
+  function buildControls() {
+    const secs = [...document.querySelectorAll('#keys section')];
+    const B = document.body.classList;
+    const cur = B.contains('in-match') ? 'sec-match' : B.contains('in-vb') ? 'sec-volley' : B.contains('in-hk') ? 'sec-hockey'
+      : B.contains('in-tank') ? 'sec-tank' : B.contains('in-race') ? 'sec-race' : B.contains('in-bj') ? 'sec-bj' : 'sec-lobby';
+    ctrlSel = cur;
+    const tabs = $('ctrlTabs');
+    tabs.innerHTML = '';
+    const show = () => {
+      const sec = secs.find((x) => x.classList.contains(ctrlSel)) || secs[0];
+      $('ctrlBody').innerHTML = '';
+      $('ctrlBody').appendChild(sec.querySelector('.grid').cloneNode(true));
+      [...tabs.children].forEach((b) => b.classList.toggle('sel', b.dataset.sec === ctrlSel));
+    };
+    for (const sec of secs) {
+      const b = document.createElement('button');
+      b.dataset.sec = [...sec.classList].find((c) => c.startsWith('sec-'));
+      b.textContent = sec.querySelector('h5').textContent;
+      b.onclick = () => { ctrlSel = b.dataset.sec; show(); };
+      tabs.appendChild(b);
+    }
+    show();
+  }
+  // Ses ayarları
+  function syncSoundUi() {
+    $('sOn').checked = !SFX.muted;
+    const v = SFX.volume;
+    document.querySelectorAll('#menu .srow input').forEach((r) => {
+      r.value = Math.round(v[r.dataset.k] * 100);
+      r.nextElementSibling.textContent = r.value + '%';
+    });
+  }
+  $('sOn').onchange = () => {
+    SFX.init();
+    SFX.setMuted(!$('sOn').checked);
+    updateSoundBtn();
+  };
+  document.querySelectorAll('#menu .srow input').forEach((r) => {
+    r.oninput = () => {
+      SFX.setVolume(r.dataset.k, r.value / 100);
+      r.nextElementSibling.textContent = r.value + '%';
+    };
+    r.onchange = () => {
+      SFX.init();
+      if (r.dataset.k === 'fx' || r.dataset.k === 'master') SFX.click(); // seviyeyi duyarak ayarla
+    };
+  });
+
+  // Oyuncu listesi: Tab ile aç/kapat (tercih hatırlanır)
+  let playersOff = !!store.get('imlec-kampi:liste-kapali', false);
+  document.body.classList.toggle('players-off', playersOff);
+  function togglePlayers() {
+    playersOff = !playersOff;
+    store.set('imlec-kampi:liste-kapali', playersOff);
+    document.body.classList.toggle('players-off', playersOff);
+    toast(playersOff ? '👥 Oyuncu listesi gizlendi (Tab ile aç)' : '👥 Oyuncu listesi açık');
   }
 
   // Tuş rehberi: kısa süre görünüp kaybolur (girişte, maça girip çıkınca, H ile)
@@ -397,6 +473,10 @@
         return;
       case 'KeyV':
         cycleWatch();
+        return;
+      case 'Tab':
+        e.preventDefault();
+        togglePlayers();
         return;
     }
     const n = /^Digit([1-8])$/.exec(e.code);

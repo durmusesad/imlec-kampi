@@ -3,9 +3,13 @@
 (function () {
   'use strict';
   const KEY = 'imlec-kampi:ses';
-  let ac = null, master = null, bus = null, noiseBuf = null;
+  let ac = null, master = null, bus = null, ambBus = null, engBus = null, noiseBuf = null;
   let muted = false;
   try { muted = localStorage.getItem(KEY) === 'kapali'; } catch {}
+  // Ses seviyeleri (0–1): ana, efektler, ortam (su/çamur/kalabalık…), motor
+  const VKEY = 'imlec-kampi:ses-seviye';
+  const vol = { master: 0.8, fx: 1, amb: 1, eng: 1 };
+  try { Object.assign(vol, JSON.parse(localStorage.getItem(VKEY)) || {}); } catch {}
   const loops = {};
 
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
@@ -21,10 +25,13 @@
     comp.threshold.value = -14;
     comp.ratio.value = 4;
     master = ac.createGain();
-    master.gain.value = muted ? 0 : 0.8;
+    master.gain.value = muted ? 0 : vol.master;
     master.connect(comp);
     comp.connect(ac.destination);
-    bus = master;
+    const sub = (v) => { const g = ac.createGain(); g.gain.value = v; g.connect(master); return g; };
+    bus = sub(vol.fx);
+    ambBus = sub(vol.amb);
+    engBus = sub(vol.eng);
     // 2 sn beyaz gürültü (tüm hışırtı/su/lastik sesleri bundan süzülür)
     noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
     const d = noiseBuf.getChannelData(0);
@@ -38,7 +45,16 @@
   function setMuted(v) {
     muted = v;
     try { localStorage.setItem(KEY, v ? 'kapali' : 'acik'); } catch {}
-    if (master) master.gain.setTargetAtTime(v ? 0 : 0.8, now(), 0.05);
+    if (master) master.gain.setTargetAtTime(v ? 0 : vol.master, now(), 0.05);
+  }
+  function setVolume(k, v) {
+    if (!(k in vol)) return;
+    vol[k] = clamp(+v || 0, 0, 1);
+    try { localStorage.setItem(VKEY, JSON.stringify(vol)); } catch {}
+    if (!ac) return;
+    const node = { master, fx: bus, amb: ambBus, eng: engBus }[k];
+    if (k === 'master' && muted) return;
+    node.gain.setTargetAtTime(vol[k], now(), 0.05);
   }
 
   // Çıkış: isteğe bağlı stereo konum
@@ -120,8 +136,8 @@
     if (ac.createStereoPanner) {
       pan = ac.createStereoPanner();
       g.connect(pan);
-      pan.connect(bus);
-    } else g.connect(bus);
+      pan.connect(ambBus);
+    } else g.connect(ambBus);
     if (o.lfo) {
       const l = ac.createOscillator();
       l.frequency.value = o.lfo;
@@ -220,7 +236,7 @@
       this.pan = ac.createStereoPanner ? ac.createStereoPanner() : null;
       mix.connect(this.drive); this.drive.connect(this.shape); this.shape.connect(this.lp);
       this.lp.connect(this.body); this.body.connect(this.lope); this.lope.connect(this.vol);
-      if (this.pan) { this.vol.connect(this.pan); this.pan.connect(bus); } else this.vol.connect(bus);
+      if (this.pan) { this.vol.connect(this.pan); this.pan.connect(engBus); } else this.vol.connect(engBus);
       for (const o of [this.a, this.b, this.c, this.lfo]) o.start(t);
       this.rpm = IDLE;
       this.gear = 0;
@@ -489,6 +505,8 @@
     get on() { return !!ac && !muted; },
     get muted() { return muted; },
     setMuted,
+    setVolume,
+    get volume() { return { ...vol }; },
     loop,
     engine: () => (ac ? new Engine() : null),
   }, Object.fromEntries(Object.entries(FX).map(([k, fn]) => [k, (...a) => { if (ac && !muted) fn(...a); }])));
