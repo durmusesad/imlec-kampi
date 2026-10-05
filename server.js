@@ -288,7 +288,30 @@ function botsIn(g, team) {
   return [...players.values()].filter((p) => p.bot && (g === 'r' ? p.racer : g === 't' ? p.tanker : p[key] === team));
 }
 
+// Aynı anda sadece tek oyunda bot olabilir. Botlar başka bir oyunda bekliyorsa (maç yoksa) oradan
+// silinir; o oyunda maç sürüyorsa ekleme reddedilir.
+const GAME_NAMES = { f: 'Futbol', v: 'Voleybol', h: 'Hokey', t: 'Tank', r: 'Yarış' };
+function botGame(p) {
+  return p.team ? 'f' : p.vteam ? 'v' : p.hteam ? 'h' : p.tanker ? 't' : p.racer ? 'r' : null;
+}
+function gameRunning(g) {
+  return !!{ f: match, v: vmatch, h: hmatch, t: tmatch, r: race }[g];
+}
+function claimBots(me, g) {
+  const others = [...players.values()].filter((p) => p.bot && botGame(p) && botGame(p) !== g);
+  if (!others.length) return true;
+  const og = botGame(others[0]);
+  if (gameRunning(og)) {
+    notice(me, `Botlar şu an ${GAME_NAMES[og]} maçında. Aynı anda sadece tek oyunda bot olabilir.`);
+    return false;
+  }
+  for (const p of others) removePlayer(p);
+  notice(me, `${GAME_NAMES[og]} alanındaki botlar kaldırıldı (aynı anda sadece tek oyunda bot olabilir).`);
+  return true;
+}
+
 function addBot(me, g, team, at) {
+  if (!claimBots(me, g)) return;
   if (g === 't') {
     if (tankerIds().length >= TK.maxTanks) return notice(me, `Tank oyunu dolu (en fazla ${TK.maxTanks} tank).`);
     setTanker(makeBot(at), true);
@@ -542,7 +565,7 @@ function broadcastVMatch() {
   if (!vmatch) return;
   const F = WORLD.VFIELD, M = 1200;
   broadcastFresh({ t: 'vg', ...vmatch.snapshot(vackOf) },
-    (p) => vmatch.players.has(p.id) || (p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M));
+    (p) => vmatch.players.has(p.id) || p.watch === 'v' || (p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M));
 }
 
 function stepVMatch(now) {
@@ -638,7 +661,7 @@ function broadcastHMatch() {
   if (!hmatch) return;
   const F = WORLD.HFIELD, M = 1200;
   broadcastFresh({ t: 'hg', ...hmatch.snapshot(hackOf) },
-    (p) => hmatch.players.has(p.id) || (p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M));
+    (p) => hmatch.players.has(p.id) || p.watch === 'h' || (p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M));
 }
 
 function stepHMatch(now) {
@@ -745,7 +768,7 @@ function broadcastTMatch() {
     const ws = p.ws;
     if (!ws || ws.readyState !== 1 || ws.bufferedAmount > FRESH_MAX_BUFFER) continue;
     const mine = tmatch.players.has(p.id);
-    if (!mine && !far && !(p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M)) continue;
+    if (!mine && !far && p.watch !== 't' && !(p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M)) continue;
     ws.send(mine ? JSON.stringify({ t: 'tg', ...tmatch.snapshot(tackOf, p.id), mn: tmatch.minesOf(p.id) }) : pub);
   }
 }
@@ -846,7 +869,7 @@ function broadcastRace() {
   const R = TRACK.REGION, M = 1200;
   const g = { t: 'rg', ...race.snapshot((id) => { const p = players.get(id); const c = p && chan(p, 'r'); return c ? [c.ack, c.buf] : [0, 2]; }) };
   // Yarışanlara ve pistin yakınındakilere saniyede 60, uzaktakilere (mini harita için) saniyede 4
-  broadcastFresh(g, (p) => race.cars.has(p.id) || (p.x > R.x - M && p.x < R.x + R.w + M && p.y > R.y - M && p.y < R.y + R.h + M));
+  broadcastFresh(g, (p) => race.cars.has(p.id) || p.watch === 'r' || (p.x > R.x - M && p.x < R.x + R.w + M && p.y > R.y - M && p.y < R.y + R.h + M));
 }
 
 // Hızlı güncellenen durum mesajları için gönderim:
@@ -1051,11 +1074,11 @@ wss.on('connection', (ws) => {
         const at = { x: bp.r.x + bp.r.w / 2, y: bp.r.y + bp.r.h + 50 };
         if (bp.op === 'add') addBot(me, bp.g, bp.team, at);
         else if (bp.op === 'del') removeBot(me, bp.g, bp.team);
-        else if (bp.op === 'fill' && bp.g === 't') {
-          while (tankerIds().length < TK.maxTanks) setTanker(makeBot(at), true);
-        } else if (bp.op === 'fill') {
-          if (race) return notice(me, 'Yarış sürüyor, bitince bot ekleyebilirsin.');
-          while (racerIds().length < RC.MAX_CARS) setRacer(makeBot(at), true);
+        else if (bp.op === 'fill') {
+          if (bp.g === 'r' && race) return notice(me, 'Yarış sürüyor, bitince bot ekleyebilirsin.');
+          if (!claimBots(me, bp.g)) return;
+          if (bp.g === 't') while (tankerIds().length < TK.maxTanks) setTanker(makeBot(at), true);
+          else while (racerIds().length < RC.MAX_CARS) setRacer(makeBot(at), true);
         }
         break;
       }
@@ -1096,6 +1119,11 @@ wss.on('connection', (ws) => {
         else if (me.vteam) setVTeam(me, null);
         else if (me.hteam) setHTeam(me, null);
         else if (me.team) setTeam(me, null);
+        break;
+      }
+      case 'watch': {
+        // İzleyici modu: oyunda olmayan oyuncu bir maçı izliyor; o maçın durumu ona sık gönderilir
+        me.watch = GAME_NAMES[m.g] ? m.g : null;
         break;
       }
       case 'png': {
@@ -1283,7 +1311,7 @@ function broadcastMatch() {
   const F = WORLD.FIELD, M = 1200;
   // Maçtakilere ve sahanın yakınındakilere saniyede 60, uzaktakilere (mini harita için) saniyede 4
   broadcastFresh({ t: 'g', ...match.snapshot(ackOf) },
-    (p) => match.players.has(p.id) || (p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M));
+    (p) => match.players.has(p.id) || p.watch === 'f' || (p.x > F.x - M && p.x < F.x + F.w + M && p.y > F.y - M && p.y < F.y + F.h + M));
 }
 
 let endAt = 0;

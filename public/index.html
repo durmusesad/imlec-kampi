@@ -119,6 +119,18 @@
 
   body.normal #c { filter: saturate(.55) brightness(.92); }
 
+  /* İzleyici çubuğu: maç sürerken dışarıdakiler sahayı izleyebilir */
+  #watchBar {
+    position: fixed; top: 12px; left: 12px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    max-width: min(420px, 60vw); background: var(--paper); border: 2px solid var(--ink); border-radius: 10px;
+    padding: 5px 8px; font-size: 13px; font-weight: 800; box-shadow: 3px 3px 0 var(--ink);
+  }
+  #watchBar.hidden { display: none; }
+  #watchBar .btn2.small { padding: 3px 9px; font-size: 12px; }
+  #watchBar .btn2.on { background: var(--ink); color: #ffe08a; }
+  #watchBar kbd { min-width: 20px; height: 20px; font-size: 11px; }
+  body.watching #keys { display: none; }
+
   #toast {
     position: fixed; top: 100px; left: 50%; transform: translate(-50%, -10px); background: var(--paper);
     border: 2px solid var(--ink); border-radius: 10px; padding: 8px 14px; font-size: 14px; font-weight: 700;
@@ -335,6 +347,7 @@
     <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
     <span class="k"><kbd>Q</kbd></span><span class="lbl">Oyunu durdur (normal imleç)</span>
     <span class="k"><kbd>M</kbd></span><span class="lbl">Sesi aç / kapat</span>
+    <span class="k"><kbd>V</kbd></span><span class="lbl">Süren maçı izle (sırayla, sonra kapat)</span>
   </div></section>
   <section class="sec-race"><h5>Yarış</h5><div class="grid">
     <span class="k"><kbd>W</kbd><span class="or">/</span><kbd>↑</kbd></span><span class="lbl">Gaz</span>
@@ -395,6 +408,7 @@
 </div>
 <div id="raceResults" class="hidden"><div class="card"><h1 id="rrTitle">🏁 Yarış sonuçları</h1><p id="rrSub"></p><div id="rrList"></div></div></div>
 <div id="toast"></div>
+<div id="watchBar" class="hidden"></div>
 <div id="vscore" class="hidden"><span class="vt">🏐</span><span class="team red" id="vRed">0</span><span class="sep">:</span><span class="team blue" id="vBlue">0</span><span id="vInfo"></span></div>
 <div id="tscore" class="hidden"><div class="trow"><span id="tRound">Tur 1</span><span id="tList"></span></div><div id="tAmmo" class="hidden"></div></div>
 <div id="hscore" class="hidden"><span id="hPer">1. Periyot</span><span class="team red" id="hRed">0</span><span id="hTime">01:30</span><span class="team blue" id="hBlue">0</span></div>

@@ -220,6 +220,7 @@
 
   canvas.addEventListener('mousedown', (e) => {
     if (!joined || !locked) return; // normal modda tek tıklama hiçbir şey yapmaz
+    if (watching) return; // izlerken imleç ekranda değil; alanlara/menüye tıklanmasın
     if (inVb()) {
       // Voleybol: sol tık pas, sağ tık smaç (emoji menüsü yerine; emojiler 1–8 ile)
       if (e.button === 0) mouseBits |= 16;
@@ -380,6 +381,9 @@
         return;
       case 'KeyM':
         toggleSound();
+        return;
+      case 'KeyV':
+        cycleWatch();
         return;
     }
     const n = /^Digit([1-8])$/.exec(e.code);
@@ -581,6 +585,7 @@
         }
         renderPlayerList();
         sendStatus(true);
+        if (watching) send({ t: 'watch', g: watching }); // yeniden bağlanınca izlemeye devam
         break;
       case 'join':
         addPlayer(m.p);
@@ -2943,6 +2948,7 @@
       get rr() { return lastRr; }, get rsim() { return rsim; }, get rpending() { return rpending; },
       get hsim() { return hsim; }, get hpending() { return hpending; },
       get tsim() { return tsim; },
+      get watching() { return watching; }, cycleWatch: () => cycleWatch(), get cam() { return cam; }, get zoom() { return zoom; },
       get vsim() { return vsim; }, get vpending() { return vpending; }, aim, setMouse: (b) => { mouseBits = b; }, get bits() { return inputBits(); },
       startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
       get stats() { return corrStats; },
@@ -3947,6 +3953,72 @@
     ctx.restore();
   }
 
+  // ---------- İzleyici modu ----------
+  // Oyunda olmayan oyuncu süren bir maçı izleyebilir: kamera sahayı ortalar, ekrana sığmıyorsa
+  // uzaklaşır (imleç olduğu yerde kalır). Yarışta öndeki aracı takip eder.
+  const WATCH = [
+    ['f', '⚽ Futbol', () => lobby.running],
+    ['v', '🏐 Voleybol', () => lobby.vRunning],
+    ['h', '🏒 Hokey', () => lobby.hRunning],
+    ['t', '💣 Tank', () => lobby.tRunning],
+    ['r', '🏎️ Yarış', () => lobby.raceRunning],
+  ];
+  const WATCH_RECT = { f: W.FIELD, v: W.VFIELD, h: W.HFIELD, t: W.TFIELD };
+  let watching = null, watchKey = '';
+  function watchable() {
+    if (!joined || inMatch() || inRace() || inVb() || inHk() || inTank()) return [];
+    return WATCH.filter((w) => w[2]());
+  }
+  function setWatch(g) {
+    if (g === watching) return;
+    watching = g;
+    send({ t: 'watch', g });
+    inAx = inAy = 0;
+    radial = null;
+    document.body.classList.toggle('watching', !!g);
+    updateWatchUi();
+  }
+  function cycleWatch() {
+    const list = watchable();
+    const i = list.findIndex((w) => w[0] === watching);
+    setWatch(i + 1 < list.length ? list[i + 1][0] : null);
+  }
+  function updateWatchUi() {
+    const list = watchable();
+    if (watching && !list.some((w) => w[0] === watching)) return setWatch(null); // maç bitti ya da oyuna girdim
+    const key = list.map((w) => w[0]).join('') + '|' + watching;
+    if (key === watchKey) return;
+    watchKey = key;
+    const bar = $('watchBar');
+    bar.classList.toggle('hidden', !list.length);
+    bar.innerHTML = '<span>👁 İzle</span>';
+    for (const [g, label] of list) {
+      const b = document.createElement('button');
+      b.className = 'btn2 small' + (g === watching ? ' on' : '');
+      b.textContent = label;
+      b.title = g === watching ? 'İzlemeyi bırak' : 'Bu maçı izle';
+      b.onclick = () => setWatch(watching === g ? null : g);
+      bar.appendChild(b);
+    }
+    const k = document.createElement('kbd');
+    k.textContent = 'V';
+    k.title = 'Oyun modunda V: sıradaki maç / kapat';
+    bar.appendChild(k);
+  }
+  function watchTarget(rr) {
+    const R = WATCH_RECT[watching];
+    if (R) return { x: R.x + R.w / 2, y: R.y + R.h / 2 };
+    const st = raceStandings();
+    const lead = st.find((c) => !c.finished) || st[0];
+    const c = lead && rr && rr.get(lead.id);
+    return c ? { x: c.x, y: c.y } : { x: TR.PADS.join.x, y: TR.PADS.join.y };
+  }
+  function watchZoom() {
+    const R = WATCH_RECT[watching];
+    if (!R) return 1;
+    return Math.min(1, (vw - 40) / (R.w + 160), (vh - 120) / (R.h + 200));
+  }
+
   // ---------- Döngü ----------
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -4046,9 +4118,16 @@
       // Ekran labirenti alıyorsa ortasına bak, almıyorsa kendi tankını takip et (yakınlaştırma yok)
       if (wvw >= TK.w + 40) camLead.x = TK.x + TK.w / 2 - me.x;
       if (wvh >= TK.h + 120) camLead.y = TK.y + TK.h / 2 - me.y;
+    } else if (watching) {
+      // İzlerken imleç yerinde durur, kamera sahaya bakar
+      me.vx = me.vy = 0;
+      inAx = inAy = 0;
+      const t = watchTarget(rr);
+      camLead.x = t.x - me.x;
+      camLead.y = t.y - me.y;
     } else if (joined && !inMatch() && !inRace() && !inVb() && !inHk()) stepMovement(dt);
     // Yakınlaştırma yumuşak geçer; görünen alan değişirken kamera merkezi sabit kalsın
-    const targetZoom = myCar ? RACE_ZOOM : 1;
+    const targetZoom = myCar ? RACE_ZOOM : watching ? watchZoom() : 1;
     if (Math.abs(targetZoom - zoom) > 0.001) {
       const cx = cam.x + wvw / 2, cy = cam.y + wvh / 2;
       zoom += (targetZoom - zoom) * (1 - Math.exp(-dt * 4));
@@ -4108,6 +4187,7 @@
     updateTHud();
     updateRaceHud();
     updatePing();
+    updateWatchUi();
     requestAnimationFrame(frame);
   }
 
