@@ -4076,7 +4076,7 @@
   // Bir el: kartlar yan yana biraz üst üste; yeni kart destelikten kayarak gelir
   function drawHand(key, cards, cx, cy, time) {
     const gap = 24, x0 = cx - ((cards.length - 1) * gap) / 2;
-    const shoe = { x: BJ.cx + BJ.rx - 110, y: BJ.top + 55 };
+    const shoe = BJ.shoe;
     cards.forEach((c, k) => {
       const id = `${bjRound}:${key}:${k}`;
       if (!bjSeen.has(id)) bjSeen.set(id, time);
@@ -4141,16 +4141,11 @@
     g.addColorStop(1, '#17663f');
     ctx.fillStyle = g;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.ellipse(cx, top, rx * 0.5, ry * 0.5, 0, 0.12, Math.PI - 0.12);
-    ctx.stroke();
     ctx.fillStyle = 'rgba(255,255,255,0.32)';
     ctx.font = 'bold 15px Nunito, Trebuchet MS, sans-serif';
     ctx.fillText('KRUPİYE 16\'DA ÇEKER · 17\'DE DURUR', cx, top + 162);
     // Destelik
-    const shoe = { x: cx + rx - 110, y: top + 55 };
+    const shoe = BJ.shoe;
     for (let k = 3; k >= 0; k--) drawCard(shoe.x + k * 2, shoe.y - k * 2, -1);
     if (bjs) {
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
@@ -4194,7 +4189,7 @@
         bjBadge(p.x, p.y + 48, label, bg, fg);
         if (q.r) {
           const R = { win: ['KAZANDI +1', '#2e9e5b'], bj: ['BLACKJACK +1', '#e0a400'], push: ['BERABERE', '#5689e5'], lose: ['KAYBETTİ', '#6b6b6b'] }[q.r];
-          bjBadge(p.x, p.y - 50, R[0], R[1]);
+          bjBadge(p.x, p.y + 74, R[0], R[1]);
         }
       } else if (q.w && bjs.ph !== 'idle') {
         ctx.fillStyle = 'rgba(255,255,255,0.7)';
@@ -4228,7 +4223,7 @@
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('🃏 Koltuğa tıkla otur · Dağıt · sıran gelince Space/W kart çek, S dur · krupiyeyi geçen +1 puan · L masadan kalk', cx, BJP.deal.y + BJP.deal.h + 16);
+    ctx.fillText('🃏 Koltuğa tıkla otur · Dağıt · sıran gelince Space/W kart çek, S dur · krupiyeyi geçen +1 puan · L masadan kalk', cx, BJP.s2.y + BJP.s2.h + 16);
   }
 
   // ---------- İzleyici modu ----------
@@ -4405,8 +4400,15 @@
       camLead.x = t.x - me.x;
       camLead.y = t.y - me.y;
     } else if (joined && !inMatch() && !inRace() && !inVb() && !inHk()) stepMovement(dt);
+    // Blackjack: masada oturan imleci masanın üstündeyken kamera masaya sabitlenir (imleç gezince masa kaymasın)
+    const BF = W.BJFIELD;
+    const bjCam = !watching && !myDisc && !myCar && !myV && !myH && !inTank() && inBj() && W.inRect(me.x, me.y, BF);
+    if (bjCam) {
+      camLead.x = BF.x + BF.w / 2 - me.x;
+      camLead.y = BF.y + BF.h / 2 - me.y;
+    }
     // Yakınlaştırma yumuşak geçer; görünen alan değişirken kamera merkezi sabit kalsın
-    const targetZoom = myCar ? RACE_ZOOM : watching ? watchZoom() : 1;
+    const targetZoom = myCar ? RACE_ZOOM : watching ? watchZoom() : bjCam ? Math.min(1, (vw - 20) / BF.w, (vh - 20) / BF.h) : 1;
     if (Math.abs(targetZoom - zoom) > 0.001) {
       const cx = cam.x + wvw / 2, cy = cam.y + wvh / 2;
       zoom += (targetZoom - zoom) * (1 - Math.exp(-dt * 4));

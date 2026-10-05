@@ -166,13 +166,13 @@
     const c = BJ.seatPos(i, 1.13);
     BJPADS['s' + i] = { x: Math.round(c.x - 80), y: Math.round(c.y - 34), w: 160, h: 68 };
   }
-  {
-    const y = Math.round(BJ.top + BJ.ry * 1.13 + 80);
-    BJPADS.hit = { x: BJ.cx - 340, y, w: 200, h: 84 };
-    BJPADS.deal = { x: BJ.cx - 100, y, w: 200, h: 84 };
-    BJPADS.stand = { x: BJ.cx + 140, y, w: 200, h: 84 };
-  }
-  const BJFIELD = { x: BJ.cx - BJ.rx - 140, y: BJ.top - 90, w: BJ.rx * 2 + 280, h: BJPADS.deal.y + 84 + 40 - (BJ.top - 90) };
+  // Hamle alanları masanın üstünde (imleç masadan ayrılmadan oynanır): krupiyenin iki yanında
+  // Kart Çek / Dur, ortada krupiyenin altında Dağıt
+  BJPADS.hit = { x: BJ.cx - 380, y: BJ.top + 25, w: 190, h: 80 };
+  BJPADS.stand = { x: BJ.cx + 170, y: BJ.top + 25, w: 170, h: 80 };
+  BJPADS.deal = { x: BJ.cx - 100, y: BJ.top + 175, w: 200, h: 70 };
+  BJ.shoe = { x: BJ.cx + 415, y: BJ.top + 60 };
+  const BJFIELD = { x: BJ.cx - BJ.rx - 140, y: BJ.top - 90, w: BJ.rx * 2 + 280, h: 900 - (BJ.top - 90) };
   // Kart: 0–51 → rank = c % 13 (0 = As … 12 = Papaz), suit = c / 13 (♠ ♥ ♦ ♣)
   BJ.rank = (c) => ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'][c % 13];
   BJ.suit = (c) => ['♠', '♥', '♦', '♣'][Math.floor(c / 13)];
