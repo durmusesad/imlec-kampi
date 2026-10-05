@@ -281,6 +281,7 @@
       }
     }
     for (const [name, pad] of Object.entries(BJP)) {
+      if (!bjPadLive(name)) continue;
       if (W.inRect(me.x, me.y, pad)) {
         SFX.click();
         send({ t: 'bpad', pad: name });
@@ -3986,6 +3987,37 @@
   function bjMyTurn() {
     return !!bjs && bjs.ph === 'turns' && bjs.turn >= 0 && bjs.turn === bjMySeat();
   }
+  // Alan şu an görünür/tıklanabilir mi: Çek/Dur sadece kendi sıramda kendi koltuğumda, Dağıt sadece el yokken
+  function bjPadLive(name) {
+    const m = /^(hit|stand)(\d)$/.exec(name);
+    if (m) return bjMyTurn() && +m[2] === bjMySeat();
+    if (name === 'deal') return !bjs || bjs.ph === 'idle' || bjs.ph === 'result';
+    return true;
+  }
+  // Küçük masa düğmesi
+  function bjButton(r, fill, text, over) {
+    ctx.save();
+    if (over) {
+      ctx.translate(r.x + r.w / 2, r.y + r.h / 2);
+      ctx.scale(1.06, 1.06);
+      ctx.translate(-(r.x + r.w / 2), -(r.y + r.h / 2));
+    }
+    ctx.fillStyle = INK;
+    roundRect(ctx, r.x + 2, r.y + 3, r.w, r.h, 9);
+    ctx.fill();
+    ctx.fillStyle = fill;
+    roundRect(ctx, r.x, r.y, r.w, r.h, 9);
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, r.x + r.w / 2, r.y + r.h / 2 + 1);
+    ctx.restore();
+  }
   function bjLeft() {
     return bjs ? Math.max(0, bjs.left - (performance.now() - bjs.at)) : 0;
   }
@@ -4207,16 +4239,16 @@
       else if (i === my) padBox(pad, turn ? '#f0a93b' : '#2e8b57', `✓ ${pl ? pl.name : 'Sen'}`, [turn ? `Sıra sende · ${Math.ceil(left / 1000)} sn` : 'Kalkmak için tıkla'], over(pad));
       else padBox(pad, turn ? '#f0a93b' : '#7b5e3b', pl ? pl.name : '…', [turn ? `Oynuyor · ${Math.ceil(left / 1000)} sn` : q.w ? 'Bekliyor' : 'Masada'], over(pad));
     }
-    // Hamle alanları
-    const myTurn = bjMyTurn();
-    padBox(BJP.hit, myTurn ? '#2e9e5b' : '#8a8a8a', '➕ Kart Çek', [myTurn ? 'Space / W' : 'Sıran gelince'], over(BJP.hit));
-    padBox(BJP.stand, myTurn ? '#c0392b' : '#8a8a8a', '✋ Dur', [myTurn ? 'S' : 'Sıran gelince'], over(BJP.stand));
-    const seated = bjs ? bjs.s.filter(Boolean).length : 0;
-    let title = '🃏 Dağıt', lines, fill = '#f0a93b';
-    if (!bjs || bjs.ph === 'idle') lines = seated ? [`${seated}/${BJ.seats} oyuncu · eli başlat`] : ['Önce koltuğa otur'];
-    else if (bjs.ph === 'result') { title = '🃏 Yeni El Dağıt'; lines = ['Tıkla, yeni eli başlat']; }
-    else { title = '🃏 El sürüyor'; fill = '#8a8a8a'; lines = [bjs.ph === 'dealer' ? 'Krupiye oynuyor' : bjs.ph === 'deal' ? 'Kartlar dağıtılıyor' : 'Oyuncular oynuyor']; }
-    padBox(BJP.deal, fill, title, lines, over(BJP.deal));
+    // Kart Çek / Dur: sıra bendeyse kendi koltuğumun üstünde
+    if (bjMyTurn()) {
+      bjButton(BJP['hit' + my], '#2e9e5b', 'Çek · W', over(BJP['hit' + my]));
+      bjButton(BJP['stand' + my], '#c0392b', 'Dur · S', over(BJP['stand' + my]));
+    }
+    // Dağıt: el yokken ortada
+    if (bjPadLive('deal')) {
+      const seated = bjs ? bjs.s.filter(Boolean).length : 0;
+      bjButton(BJP.deal, seated ? '#f0a93b' : '#a8916b', bjs && bjs.ph === 'result' ? '🃏 Yeni El' : '🃏 Dağıt', over(BJP.deal));
+    }
     ctx.fillStyle = 'rgba(59,47,36,0.75)';
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';

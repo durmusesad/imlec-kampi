@@ -1151,7 +1151,11 @@ wss.on('connection', (ws) => {
           if (!bjSeated(me)) notice(me, 'Önce bir koltuğa otur.');
           else if (!bj.canStart()) notice(me, 'El sürüyor; bitince Dağıt ile yenisini başlatabilirsin.');
           else bj.start(Date.now());
-        } else bjAct(me, m.pad);
+        } else {
+          // Koltuk düğmesi (hit0 / stand3 …): sadece kendi koltuğunun düğmesi geçerli
+          const [, a, n] = /^(hit|stand)(\d)$/.exec(m.pad);
+          if (bj.seatOf(me.id) === +n) bjAct(me, a);
+        }
         break;
       }
       case 'bj': {

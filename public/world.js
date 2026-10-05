@@ -166,11 +166,14 @@
     const c = BJ.seatPos(i, 1.13);
     BJPADS['s' + i] = { x: Math.round(c.x - 80), y: Math.round(c.y - 34), w: 160, h: 68 };
   }
-  // Hamle alanları masanın üstünde (imleç masadan ayrılmadan oynanır): krupiyenin iki yanında
-  // Kart Çek / Dur, ortada krupiyenin altında Dağıt
-  BJPADS.hit = { x: BJ.cx - 380, y: BJ.top + 25, w: 190, h: 80 };
-  BJPADS.stand = { x: BJ.cx + 170, y: BJ.top + 25, w: 170, h: 80 };
-  BJPADS.deal = { x: BJ.cx - 100, y: BJ.top + 175, w: 200, h: 70 };
+  // Kart Çek / Dur: her koltuğun hemen üstünde iki küçük düğme (sadece sırası gelene görünür).
+  // Dağıt: masanın ortasında, krupiyenin altında (sadece el yokken)
+  for (let i = 0; i < BJ.seats; i++) {
+    const s = BJPADS['s' + i];
+    BJPADS['hit' + i] = { x: s.x, y: s.y - 42, w: 76, h: 34 };
+    BJPADS['stand' + i] = { x: s.x + s.w - 76, y: s.y - 42, w: 76, h: 34 };
+  }
+  BJPADS.deal = { x: BJ.cx - 80, y: BJ.top + 185, w: 160, h: 50 };
   BJ.shoe = { x: BJ.cx + 415, y: BJ.top + 60 };
   const BJFIELD = { x: BJ.cx - BJ.rx - 140, y: BJ.top - 90, w: BJ.rx * 2 + 280, h: 900 - (BJ.top - 90) };
   // Kart: 0–415 (8 deste); c % 52 → rank = % 13 (0 = As … 12 = Papaz), suit = / 13 (♠ ♥ ♦ ♣)
