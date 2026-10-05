@@ -175,7 +175,7 @@
   }
   BJPADS.deal = { x: BJ.cx - 80, y: BJ.top + 185, w: 160, h: 50 };
   BJ.shoe = { x: BJ.cx + 415, y: BJ.top + 60 };
-  const BJFIELD = { x: BJ.cx - BJ.rx - 140, y: BJ.top - 90, w: BJ.rx * 2 + 280, h: 900 - (BJ.top - 90) };
+  const BJFIELD = { x: BJ.cx - BJ.rx - 140, y: BJ.top - 110, w: BJ.rx * 2 + 280, h: 900 - (BJ.top - 110) };
   // Kart: 0–415 (8 deste); c % 52 → rank = % 13 (0 = As … 12 = Papaz), suit = / 13 (♠ ♥ ♦ ♣)
   BJ.rank = (c) => ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'][c % 13];
   BJ.suit = (c) => ['♠', '♥', '♦', '♣'][Math.floor((c % 52) / 13)];

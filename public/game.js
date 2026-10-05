@@ -4137,15 +4137,44 @@
     return v.soft && v.t < 21 ? `${v.t - 10}/${v.t}` : String(v.t);
   }
 
+  // Elipsin alt yayı boyunca soldan sağa yazı (harfler krupiyeye dönük, dik)
+  function arcText(text, cx, cy, rx, ry, font, color) {
+    ctx.save();
+    ctx.font = font;
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const chars = [...text], ws = chars.map((ch) => ctx.measureText(ch).width + 0.6);
+    const step = (th, w) => w / Math.hypot(rx * Math.sin(th), ry * Math.cos(th));
+    let total = 0, th = Math.PI / 2;
+    for (const w of ws) total += step(Math.PI / 2, w);
+    th = Math.PI / 2 + total / 2;
+    chars.forEach((ch, k) => {
+      const d = step(th, ws[k]);
+      const a = th - d / 2;
+      ctx.save();
+      ctx.translate(cx + rx * Math.cos(a), cy + ry * Math.sin(a));
+      ctx.rotate(Math.atan2(-ry * Math.cos(a), rx * Math.sin(a)));
+      ctx.fillText(ch, 0, 0);
+      ctx.restore();
+      th -= d;
+    });
+    ctx.restore();
+  }
+
   function drawBlackjack(time) {
     const F = W.BJFIELD;
     if (!inView(F.x + F.w / 2, F.y + F.h / 2, Math.max(F.w, F.h) / 2 + 100)) return;
     const { cx, top, rx, ry } = BJ;
-    const shape = (k, dy) => {
+    // Masa dış hatları: krupiye tarafı düz (köşeleri yuvarlak), oyuncu tarafı yarım elips. e = dışa genişleme
+    const shape = (e) => {
+      const L = cx - rx - e, R = cx + rx + e, y0 = top - e, c = 26 + e;
       ctx.beginPath();
-      ctx.moveTo(cx - rx * k, top + dy);
-      ctx.lineTo(cx + rx * k, top + dy);
-      ctx.ellipse(cx, top + dy, rx * k, ry * k, 0, 0, Math.PI);
+      ctx.moveTo(L + c, y0);
+      ctx.lineTo(R - c, y0);
+      ctx.quadraticCurveTo(R, y0, R, top);
+      ctx.ellipse(cx, top, rx + e, ry + e, 0, 0, Math.PI);
+      ctx.quadraticCurveTo(L, y0, L + c, y0);
       ctx.closePath();
     };
     // Tabela
@@ -4153,39 +4182,145 @@
     ctx.textBaseline = 'middle';
     ctx.font = 'bold 26px Nunito, Trebuchet MS, sans-serif';
     ctx.fillStyle = INK;
-    ctx.fillText('🃏 Blackjack Masası', cx, top - 62);
-    // Masa: gölge, ahşap kenar, çuha
+    ctx.fillText('🃏 Blackjack Masası', cx, top - 82);
+    // Gölge
     ctx.save();
-    ctx.translate(6, 8);
-    shape(1.06, -22);
+    ctx.translate(8, 10);
+    shape(40);
     ctx.fillStyle = 'rgba(59,47,36,0.35)';
     ctx.fill();
     ctx.restore();
-    shape(1.06, -22);
-    ctx.fillStyle = '#6b3f22';
+    // Dolgulu deri kol dayama: koyu deri, ortasında parlaklık, iki sıra dikiş
+    shape(40);
+    const rg = ctx.createLinearGradient(0, top - 40, 0, top + ry + 40);
+    rg.addColorStop(0, '#3b2418');
+    rg.addColorStop(1, '#22130b');
+    ctx.fillStyle = rg;
     ctx.fill();
     ctx.strokeStyle = INK;
     ctx.lineWidth = 3;
     ctx.stroke();
-    shape(1, 0);
-    const g = ctx.createRadialGradient(cx, top + 120, 40, cx, top + 120, rx);
-    g.addColorStop(0, '#2a9160');
-    g.addColorStop(1, '#17663f');
+    shape(23);
+    ctx.strokeStyle = 'rgba(255,230,200,0.10)';
+    ctx.lineWidth = 12;
+    ctx.stroke();
+    ctx.setLineDash([7, 6]);
+    ctx.strokeStyle = 'rgba(255,214,170,0.35)';
+    ctx.lineWidth = 1.5;
+    shape(33);
+    ctx.stroke();
+    shape(13);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    // Ahşap şerit
+    shape(7);
+    ctx.fillStyle = '#a0703c';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(59,47,36,0.8)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // Çuha: ortası açık, kenarlara doğru koyulaşan yeşil + iç gölge
+    shape(0);
+    const g = ctx.createRadialGradient(cx, top + 150, 60, cx, top + 150, rx * 1.05);
+    g.addColorStop(0, '#2d9a66');
+    g.addColorStop(1, '#155c39');
     ctx.fillStyle = g;
     ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.32)';
-    ctx.font = 'bold 15px Nunito, Trebuchet MS, sans-serif';
-    ctx.fillText('KRUPİYE 16\'DA ÇEKER · 17\'DE DURUR', cx, top + 162);
-    // Destelik
-    const shoe = BJ.shoe;
-    for (let k = 3; k >= 0; k--) drawCard(shoe.x + k * 2, shoe.y - k * 2, -1);
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.font = 'bold 13px Nunito, Trebuchet MS, sans-serif';
-    ctx.fillText(`${BJ.decks} deste`, shoe.x, shoe.y + 46);
-    // Krupiye
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.font = 'bold 15px Nunito, Trebuchet MS, sans-serif';
-    ctx.fillText('KRUPİYE', cx, top + 20);
+    ctx.save();
+    ctx.clip();
+    shape(0);
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)';
+    ctx.lineWidth = 16;
+    ctx.stroke();
+    ctx.restore();
+    // Çuha baskısı: iki altın çizgi arasında yay boyunca kural yazısı
+    const arcLine = (k) => {
+      ctx.beginPath();
+      ctx.ellipse(cx, top, rx * k, ry * k, 0, 0.42, Math.PI - 0.42);
+      ctx.stroke();
+    };
+    ctx.strokeStyle = 'rgba(240,200,110,0.6)';
+    ctx.lineWidth = 2;
+    arcLine(0.31);
+    arcLine(0.42);
+    arcText('KRUPİYE 16\'DA ÇEKER · 17\'DE DURUR', cx, top, rx * 0.365, ry * 0.365, 'bold 13px Nunito, Trebuchet MS, sans-serif', 'rgba(255,255,255,0.7)');
+    // Kart daireleri: her koltuğun önünde
+    ctx.strokeStyle = 'rgba(255,255,255,0.28)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < BJ.seats; i++) {
+      const p = BJ.seatPos(i, 0.66);
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y + 4, 66, 50, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Fiş rafı: krupiyenin önünde, renkli fiş sıraları
+    {
+      const w = 250, h = 34, x = cx - w / 2, y = top - 14;
+      ctx.fillStyle = '#1a110b';
+      roundRect(ctx, x, y, w, h, 6);
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      const cols = ['#c0392b', '#2e8b57', '#1d1d1d', '#7b4bb7', '#2f6fd6', '#e6b422', '#f2f2f2', '#c0392b', '#2e8b57', '#1d1d1d'];
+      const sw = (w - 12) / cols.length;
+      cols.forEach((c, k) => {
+        const sx = x + 6 + k * sw;
+        ctx.fillStyle = c;
+        ctx.fillRect(sx + 2, y + 5, sw - 4, h - 10);
+        ctx.fillStyle = 'rgba(0,0,0,0.35)';
+        for (let yy = y + 8; yy < y + h - 6; yy += 4) ctx.fillRect(sx + 2, yy, sw - 4, 1);
+      });
+    }
+    // Kart kutusu (shoe) sağda, atılan kartlar tepsisi solda
+    {
+      const sh = BJ.shoe;
+      ctx.save();
+      ctx.translate(sh.x, sh.y);
+      ctx.rotate(-0.3);
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      roundRect(ctx, -30, -40, 64, 86, 8);
+      ctx.fill();
+      ctx.fillStyle = '#2b2b2e';
+      roundRect(ctx, -33, -44, 64, 86, 8);
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#b8323a';
+      roundRect(ctx, -22, 22, 42, 26, 4); // öndeki ağızdan görünen kart
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#4a4a50';
+      roundRect(ctx, -33, 14, 64, 12, 3);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.12)';
+      roundRect(ctx, -29, -40, 8, 52, 3);
+      ctx.fill();
+      ctx.restore();
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx.font = 'bold 12px Nunito, Trebuchet MS, sans-serif';
+      ctx.fillText(`${BJ.decks} deste`, sh.x, sh.y + 62);
+      ctx.save();
+      ctx.translate(2 * cx - sh.x, sh.y);
+      ctx.rotate(0.3);
+      ctx.fillStyle = 'rgba(200,40,40,0.35)';
+      roundRect(ctx, -32, -42, 64, 84, 8);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(59,47,36,0.8)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+      for (let k = 0; k < 3; k++) {
+        ctx.save();
+        ctx.translate(2 * cx - sh.x + k * 1.5, sh.y - k * 2);
+        ctx.rotate(0.3 + (k - 1) * 0.06);
+        drawCard(0, 0, -1);
+        ctx.restore();
+      }
+    }
     if (bjs && bjs.d.length) {
       drawHand('d', bjs.d, cx, top + 78, time);
       const hidden = bjs.d.includes(-1);
