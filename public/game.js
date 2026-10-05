@@ -4147,11 +4147,9 @@
     // Destelik
     const shoe = BJ.shoe;
     for (let k = 3; k >= 0; k--) drawCard(shoe.x + k * 2, shoe.y - k * 2, -1);
-    if (bjs) {
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
-      ctx.font = 'bold 13px Nunito, Trebuchet MS, sans-serif';
-      ctx.fillText(`${bjs.n} kart`, shoe.x, shoe.y + 46);
-    }
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.font = 'bold 13px Nunito, Trebuchet MS, sans-serif';
+    ctx.fillText(`${BJ.decks} deste`, shoe.x, shoe.y + 46);
     // Krupiye
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.font = 'bold 15px Nunito, Trebuchet MS, sans-serif';
@@ -4216,14 +4214,14 @@
     const seated = bjs ? bjs.s.filter(Boolean).length : 0;
     let title = '🃏 Dağıt', lines, fill = '#f0a93b';
     if (!bjs || bjs.ph === 'idle') lines = seated ? [`${seated}/${BJ.seats} oyuncu · eli başlat`] : ['Önce koltuğa otur'];
-    else if (bjs.ph === 'result') { title = '🃏 Yeni el'; fill = '#8a8a8a'; lines = [`${Math.ceil(left / 1000)} sn sonra`]; }
+    else if (bjs.ph === 'result') { title = '🃏 Yeni El Dağıt'; lines = ['Tıkla, yeni eli başlat']; }
     else { title = '🃏 El sürüyor'; fill = '#8a8a8a'; lines = [bjs.ph === 'dealer' ? 'Krupiye oynuyor' : bjs.ph === 'deal' ? 'Kartlar dağıtılıyor' : 'Oyuncular oynuyor']; }
     padBox(BJP.deal, fill, title, lines, over(BJP.deal));
     ctx.fillStyle = 'rgba(59,47,36,0.75)';
     ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText('🃏 Koltuğa tıkla otur · Dağıt · sıran gelince Space/W kart çek, S dur · krupiyeyi geçen +1 puan · L masadan kalk', cx, BJP.s2.y + BJP.s2.h + 16);
+    ctx.fillText('🃏 Koltuğa tıkla otur · her el Dağıt ile başlar · sıran gelince Space/W kart çek, S dur · krupiyeyi geçen +1 puan · L masadan kalk', cx, BJP.s2.y + BJP.s2.h + 16);
   }
 
   // ---------- İzleyici modu ----------

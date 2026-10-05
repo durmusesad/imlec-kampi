@@ -1,7 +1,8 @@
 'use strict';
 // Blackjack masası (sunucu tarafı). Tur tabanlıdır: durum her değiştiğinde hooks.change() çağrılır,
 // sunucu yeni durumu herkese yollar. Krupiye sunucudur (oyuncu/bot değil): 17'ye kadar çeker, 17'de durur.
-// Tek deste (52 kart); el başında deste azaldıysa ya da el ortasında biterse masadaki kartlar hariç karılır.
+// 8 deste (416 kart, casinolardaki gibi); el başında son ~%25'e inildiyse ya da el ortasında biterse masadaki
+// kartlar hariç karılır. Kalan kart sayısı oyunculara gönderilmez. Her el Dağıt ile elle başlatılır.
 const crypto = require('crypto');
 const { BJ } = require('./public/world.js');
 
@@ -22,7 +23,7 @@ class Table {
   shuffle() {
     const inPlay = new Set([...this.dealer, ...this.seats.flatMap((s) => (s ? s.cards : []))]);
     const d = [];
-    for (let c = 0; c < 52; c++) if (!inPlay.has(c)) d.push(c);
+    for (let c = 0; c < 52 * BJ.decks; c++) if (!inPlay.has(c)) d.push(c);
     for (let i = d.length - 1; i > 0; i--) {
       const j = crypto.randomInt(i + 1);
       [d[i], d[j]] = [d[j], d[i]];
@@ -71,22 +72,22 @@ class Table {
       this.turn = -1;
       this.queue = [];
     } else if ((this.phase === 'deal' || this.phase === 'turns') && !this.playing().length) {
-      // Eldeki herkes kalktı, bekleyenler var: kısa süre sonra yeni el
+      // Eldeki herkes kalktı, bekleyenler var: el iptal, Dağıt ile yenisi başlar
       this.dealer = [];
       this.turn = -1;
       this.queue = [];
-      this.phase = 'result';
-      this.nextAt = now + 1500;
+      this.phase = 'idle';
     } else if (this.phase === 'turns' && this.turn === i) this.nextTurn(now);
     this.hooks.change();
   }
 
+  // Yeni el sadece Dağıt ile başlar (masa boşta ya da önceki elin sonucu gösteriliyorken)
   canStart() {
-    return this.phase === 'idle' && this.seats.some(Boolean);
+    return (this.phase === 'idle' || this.phase === 'result') && this.seats.some(Boolean);
   }
 
   start(now) {
-    for (const s of this.seats) if (s) s.cards = [];
+    for (const s of this.seats) if (s) { s.cards = []; s.inRound = false; }
     this.dealer = [];
     if (this.deck.length < BJ.reshuffleBelow) {
       this.shuffle();
@@ -162,8 +163,7 @@ class Table {
       else s.res = 'push';
       results.push({ id: s.id, res: s.res });
     }
-    this.phase = 'result';
-    this.nextAt = now + BJ.resultSeconds * 1000;
+    this.phase = 'result'; // sonuçlar masada kalır, yeni el Dağıt ile
     this.hooks.settled(results);
     this.hooks.change();
   }
@@ -198,22 +198,13 @@ class Table {
       else return this.settle(now);
       this.nextAt = now + BJ.dealerMs;
       this.hooks.change();
-    } else if (this.phase === 'result' && now >= this.nextAt) {
-      // Masada oyuncu varsa yeni el kendiliğinden başlar
-      for (const s of this.seats) if (s) { s.inRound = false; s.st = 'wait'; }
-      if (this.seats.some(Boolean)) this.start(now);
-      else {
-        this.phase = 'idle';
-        this.dealer = [];
-        this.hooks.change();
-      }
     }
   }
 
   snapshot(now) {
-    const left = this.phase === 'turns' ? this.deadline - now : this.phase === 'result' ? this.nextAt - now : 0;
+    const left = this.phase === 'turns' ? this.deadline - now : 0;
     return {
-      t: 'bj', ph: this.phase, turn: this.turn, left: Math.max(0, Math.round(left)), n: this.deck.length,
+      t: 'bj', ph: this.phase, turn: this.turn, left: Math.max(0, Math.round(left)),
       d: this.dealer.map((c, i) => (i === 1 && !this.reveal ? -1 : c)), // kapalı kart gönderilmez
       s: this.seats.map((s) => s && { id: s.id, c: s.cards, st: s.st, r: s.res, w: !s.inRound }),
     };

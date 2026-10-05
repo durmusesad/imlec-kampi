@@ -1149,7 +1149,7 @@ wss.on('connection', (ws) => {
           else bjSit(me, i);
         } else if (m.pad === 'deal') {
           if (!bjSeated(me)) notice(me, 'Önce bir koltuğa otur.');
-          else if (!bj.canStart()) notice(me, 'El sürüyor; bitince yenisi kendiliğinden başlar.');
+          else if (!bj.canStart()) notice(me, 'El sürüyor; bitince Dağıt ile yenisini başlatabilirsin.');
           else bj.start(Date.now());
         } else bjAct(me, m.pad);
         break;

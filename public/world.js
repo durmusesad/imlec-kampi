@@ -153,11 +153,11 @@
   const BJ = {
     cx: 5300, top: 300, rx: 480, ry: 440, // masa: üst kenar düz, alt yarısı elips
     seats: 5,
-    turnSeconds: 20, // sırası gelen bu sürede oynamazsa "Dur" sayılır
+    decks: 8, // casinolardaki gibi 8 deste (kart sayımı işe yaramasın)
+    turnSeconds: 25, // sırası gelen bu sürede oynamazsa "Dur" sayılır
     dealMs: 320, dealerMs: 750, // kart dağıtma / krupiye kart çekme aralığı
-    resultSeconds: 6, // sonuçlar görünür, sonra masada oyuncu varsa yeni el kendiliğinden başlar
     idleKick: 2, // üst üste bu kadar el hiç oynamayan masadan kalkar
-    reshuffleBelow: 20, // el başında destede bundan az kart kaldıysa deste yeniden karılır
+    reshuffleBelow: 104, // el başında destelikte bundan az kart kaldıysa (son ~%25) yeniden karılır
   };
   BJ.seatAngle = (i) => ((30 + i * 30) * Math.PI) / 180;
   BJ.seatPos = (i, k) => ({ x: BJ.cx + Math.cos(BJ.seatAngle(i)) * BJ.rx * k, y: BJ.top + Math.sin(BJ.seatAngle(i)) * BJ.ry * k });
@@ -173,10 +173,10 @@
   BJPADS.deal = { x: BJ.cx - 100, y: BJ.top + 175, w: 200, h: 70 };
   BJ.shoe = { x: BJ.cx + 415, y: BJ.top + 60 };
   const BJFIELD = { x: BJ.cx - BJ.rx - 140, y: BJ.top - 90, w: BJ.rx * 2 + 280, h: 900 - (BJ.top - 90) };
-  // Kart: 0–51 → rank = c % 13 (0 = As … 12 = Papaz), suit = c / 13 (♠ ♥ ♦ ♣)
+  // Kart: 0–415 (8 deste); c % 52 → rank = % 13 (0 = As … 12 = Papaz), suit = / 13 (♠ ♥ ♦ ♣)
   BJ.rank = (c) => ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'][c % 13];
-  BJ.suit = (c) => ['♠', '♥', '♦', '♣'][Math.floor(c / 13)];
-  BJ.red = (c) => Math.floor(c / 13) === 1 || Math.floor(c / 13) === 2;
+  BJ.suit = (c) => ['♠', '♥', '♦', '♣'][Math.floor((c % 52) / 13)];
+  BJ.red = (c) => BJ.suit(c) === '♥' || BJ.suit(c) === '♦';
   // El değeri: asları 11 sayıp 21'i geçerse 1'e indirir. soft = hâlâ 11 sayılan as var
   BJ.value = (cards) => {
     let t = 0, aces = 0;
