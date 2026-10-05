@@ -280,6 +280,13 @@
         return;
       }
     }
+    for (const [name, pad] of Object.entries(BJP)) {
+      if (W.inRect(me.x, me.y, pad)) {
+        SFX.click();
+        send({ t: 'bpad', pad: name });
+        return;
+      }
+    }
   });
   document.addEventListener('mouseup', (e) => {
     if (e.button === 0) mouseBits &= ~16;
@@ -361,6 +368,11 @@
       return;
     }
     if (e.repeat) return;
+    if (bjMyTurn() && (e.code === 'Space' || e.code === 'KeyW' || e.code === 'KeyS')) {
+      e.preventDefault();
+      bjSend(e.code === 'KeyS' ? 'stand' : 'hit');
+      return;
+    }
     switch (e.code) {
       case 'KeyQ':
         document.exitPointerLock();
@@ -371,7 +383,7 @@
         openChat();
         return;
       case 'KeyL':
-        if (myTeam() || myVTeam() || myHTeam() || (lobby.tankers || []).includes(myId) || (lobby.racers || []).includes(myId)) send({ t: 'leave' });
+        if (myTeam() || myVTeam() || myHTeam() || (lobby.tankers || []).includes(myId) || (lobby.racers || []).includes(myId) || inBj()) send({ t: 'leave' });
         return;
       case 'KeyE':
         openEmojiPanel();
@@ -654,6 +666,12 @@
       case 'tg':
         lastSnapAt = now;
         onTSnapshot(m);
+        break;
+      case 'bj':
+        onBj(m);
+        break;
+      case 'bjres':
+        onBjResult(m);
         break;
       case 'tkill':
         explode(W.TK.x + m.x, W.TK.y + m.y, m.how === 'mine');
@@ -2948,6 +2966,7 @@
       get rr() { return lastRr; }, get rsim() { return rsim; }, get rpending() { return rpending; },
       get hsim() { return hsim; }, get hpending() { return hpending; },
       get tsim() { return tsim; },
+      get bjs() { return bjs; }, bjTurn: () => ({ mine: bjMyTurn(), v: bjs && bjMySeat() >= 0 ? BJ.value(bjs.s[bjMySeat()].c).t : 0 }),
       get watching() { return watching; }, cycleWatch: () => cycleWatch(), get cam() { return cam; }, get zoom() { return zoom; },
       get vsim() { return vsim; }, get vpending() { return vpending; }, aim, setMouse: (b) => { mouseBits = b; }, get bits() { return inputBits(); },
       startStats: () => { corrStats = { ball: { n: 0, sum: 0, max: 0 }, me: { n: 0, sum: 0, max: 0 }, other: { n: 0, sum: 0, max: 0 } }; },
@@ -3953,6 +3972,265 @@
     ctx.restore();
   }
 
+  // ---------- Blackjack ----------
+  // Sunucu durumu 'bj' mesajıyla gelir (tur tabanlı, tahmin yok). Kartlar destelikten yerine kayarak gelir.
+  const BJ = W.BJ, BJP = W.BJPADS;
+  let bjs = null, bjRound = 0, bjWasMyTurn = false;
+  const bjSeen = new Map(); // kart anahtarı -> ilk görüldüğü an (kayma animasyonu)
+  function bjMySeat() {
+    return bjs ? bjs.s.findIndex((q) => q && q.id === myId) : -1;
+  }
+  function inBj() {
+    return bjMySeat() >= 0;
+  }
+  function bjMyTurn() {
+    return !!bjs && bjs.ph === 'turns' && bjs.turn >= 0 && bjs.turn === bjMySeat();
+  }
+  function bjLeft() {
+    return bjs ? Math.max(0, bjs.left - (performance.now() - bjs.at)) : 0;
+  }
+  function nearBj() {
+    const F = W.BJFIELD;
+    return cam.x + wvw > F.x && cam.x < F.x + F.w && cam.y + wvh > F.y && cam.y < F.y + F.h;
+  }
+  function onBj(m) {
+    const prev = bjs;
+    if (m.ph === 'deal' && (!prev || prev.ph !== 'deal')) {
+      bjRound++;
+      bjSeen.clear();
+    }
+    m.at = performance.now();
+    const count = (q) => (q ? q.d.length + q.s.reduce((a, x) => a + (x ? x.c.length : 0), 0) : 0);
+    bjs = m;
+    document.body.classList.toggle('in-bj', inBj());
+    if (count(m) > count(prev) && (inBj() || nearBj())) SFX.card();
+    const mine = bjMyTurn();
+    if (mine && !bjWasMyTurn) {
+      SFX.beep();
+      toast('🃏 Sıra sende! Space / W: kart çek · S: dur');
+    }
+    bjWasMyTurn = mine;
+  }
+  function onBjResult(m) {
+    scores = m.scores || scores;
+    renderPlayerList();
+    const r = m.results.find((x) => x.id === myId);
+    if (!r) return;
+    const T = {
+      bj: ['🃏 BLACKJACK!', '#ffd23f', '+1 puan'], win: ['Kazandın!', '#3ecf8e', '+1 puan'],
+      push: ['Berabere', '#fff', 'Puan yok'], lose: ['Kaybettin', '#ff8a7a', 'Krupiye kazandı'],
+    }[r.res];
+    announce(T[0], T[1], T[2]);
+    if (r.res === 'win' || r.res === 'bj') SFX.goal();
+  }
+  function bjSend(a) {
+    if (!bjMyTurn()) return;
+    SFX.click();
+    send({ t: 'bj', a });
+  }
+
+  const CARD_W = 46, CARD_H = 64;
+  function drawCard(x, y, c) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    roundRect(ctx, -CARD_W / 2 + 2, -CARD_H / 2 + 3, CARD_W, CARD_H, 6);
+    ctx.fill();
+    ctx.fillStyle = c < 0 ? '#b8323a' : '#fffdf6';
+    roundRect(ctx, -CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 6);
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    if (c < 0) {
+      // Kapalı kart: çapraz desen
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.lineWidth = 1;
+      roundRect(ctx, -CARD_W / 2 + 4, -CARD_H / 2 + 4, CARD_W - 8, CARD_H - 8, 4);
+      ctx.stroke();
+      ctx.save();
+      ctx.clip();
+      for (let k = -CARD_H; k < CARD_H; k += 7) {
+        ctx.beginPath();
+        ctx.moveTo(-CARD_W / 2, k);
+        ctx.lineTo(CARD_W / 2, k + CARD_W);
+        ctx.stroke();
+      }
+      ctx.restore();
+    } else {
+      const col = BJ.red(c) ? '#d02a2a' : '#1d1d1d';
+      ctx.fillStyle = col;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      ctx.font = 'bold 15px Arial, sans-serif';
+      ctx.fillText(BJ.rank(c), -CARD_W / 2 + 4, -CARD_H / 2 + 4);
+      ctx.font = '13px Arial, sans-serif';
+      ctx.fillText(BJ.suit(c), -CARD_W / 2 + 4, -CARD_H / 2 + 20);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = '26px Arial, sans-serif';
+      ctx.fillText(BJ.suit(c), 3, 8);
+    }
+    ctx.restore();
+  }
+  // Bir el: kartlar yan yana biraz üst üste; yeni kart destelikten kayarak gelir
+  function drawHand(key, cards, cx, cy, time) {
+    const gap = 24, x0 = cx - ((cards.length - 1) * gap) / 2;
+    const shoe = { x: BJ.cx + BJ.rx - 110, y: BJ.top + 55 };
+    cards.forEach((c, k) => {
+      const id = `${bjRound}:${key}:${k}`;
+      if (!bjSeen.has(id)) bjSeen.set(id, time);
+      const a = Math.min(1, (time - bjSeen.get(id)) / 280), e = 1 - (1 - a) * (1 - a);
+      const tx = x0 + k * gap, ty = cy - k * 2;
+      drawCard(shoe.x + (tx - shoe.x) * e, shoe.y + (ty - shoe.y) * e, c);
+    });
+  }
+  function bjBadge(x, y, text, bg, fg = '#fff') {
+    ctx.font = 'bold 14px Nunito, Trebuchet MS, sans-serif';
+    const w = ctx.measureText(text).width + 16;
+    ctx.fillStyle = bg;
+    roundRect(ctx, x - w / 2, y - 11, w, 22, 11);
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = fg;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y + 1);
+  }
+  function handLabel(cards) {
+    const v = BJ.value(cards);
+    if (BJ.isBlackjack(cards)) return 'Blackjack';
+    return v.soft && v.t < 21 ? `${v.t - 10}/${v.t}` : String(v.t);
+  }
+
+  function drawBlackjack(time) {
+    const F = W.BJFIELD;
+    if (!inView(F.x + F.w / 2, F.y + F.h / 2, Math.max(F.w, F.h) / 2 + 100)) return;
+    const { cx, top, rx, ry } = BJ;
+    const shape = (k, dy) => {
+      ctx.beginPath();
+      ctx.moveTo(cx - rx * k, top + dy);
+      ctx.lineTo(cx + rx * k, top + dy);
+      ctx.ellipse(cx, top + dy, rx * k, ry * k, 0, 0, Math.PI);
+      ctx.closePath();
+    };
+    // Tabela
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 26px Nunito, Trebuchet MS, sans-serif';
+    ctx.fillStyle = INK;
+    ctx.fillText('🃏 Blackjack Masası', cx, top - 62);
+    // Masa: gölge, ahşap kenar, çuha
+    ctx.save();
+    ctx.translate(6, 8);
+    shape(1.06, -22);
+    ctx.fillStyle = 'rgba(59,47,36,0.35)';
+    ctx.fill();
+    ctx.restore();
+    shape(1.06, -22);
+    ctx.fillStyle = '#6b3f22';
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    shape(1, 0);
+    const g = ctx.createRadialGradient(cx, top + 120, 40, cx, top + 120, rx);
+    g.addColorStop(0, '#2a9160');
+    g.addColorStop(1, '#17663f');
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(cx, top, rx * 0.5, ry * 0.5, 0, 0.12, Math.PI - 0.12);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.32)';
+    ctx.font = 'bold 15px Nunito, Trebuchet MS, sans-serif';
+    ctx.fillText('KRUPİYE 16\'DA ÇEKER · 17\'DE DURUR', cx, top + 162);
+    // Destelik
+    const shoe = { x: cx + rx - 110, y: top + 55 };
+    for (let k = 3; k >= 0; k--) drawCard(shoe.x + k * 2, shoe.y - k * 2, -1);
+    if (bjs) {
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.font = 'bold 13px Nunito, Trebuchet MS, sans-serif';
+      ctx.fillText(`${bjs.n} kart`, shoe.x, shoe.y + 46);
+    }
+    // Krupiye
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.font = 'bold 15px Nunito, Trebuchet MS, sans-serif';
+    ctx.fillText('KRUPİYE', cx, top + 20);
+    if (bjs && bjs.d.length) {
+      drawHand('d', bjs.d, cx, top + 78, time);
+      const hidden = bjs.d.includes(-1);
+      bjBadge(cx, top + 128, hidden ? `${BJ.value(bjs.d).t} + ?` : handLabel(bjs.d), BJ.value(bjs.d).t > 21 ? '#c0392b' : '#1a2130');
+    }
+    // Koltuklar: eller, durumlar, sıra
+    const left = bjLeft();
+    for (let i = 0; i < BJ.seats; i++) {
+      const q = bjs && bjs.s[i];
+      const p = BJ.seatPos(i, 0.66);
+      if (!q) continue;
+      const turn = bjs.ph === 'turns' && bjs.turn === i;
+      if (turn) {
+        // Sırası gelen: parlayan halka + kalan süre yayı
+        ctx.strokeStyle = '#ffd23f';
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y + 4, 80, 58, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+        ctx.beginPath();
+        ctx.ellipse(p.x, p.y + 4, 88, 66, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (left / (BJ.turnSeconds * 1000)));
+        ctx.stroke();
+      }
+      if (q.c.length) {
+        drawHand('s' + i, q.c, p.x, p.y, time);
+        const v = BJ.value(q.c).t;
+        let label = handLabel(q.c), bg = '#1a2130', fg = '#fff';
+        if (q.st === 'bust') { label = `${v} · BATTI`; bg = '#c0392b'; }
+        else if (q.st === 'bj') { bg = '#ffd23f'; fg = INK; }
+        bjBadge(p.x, p.y + 48, label, bg, fg);
+        if (q.r) {
+          const R = { win: ['KAZANDI +1', '#2e9e5b'], bj: ['BLACKJACK +1', '#e0a400'], push: ['BERABERE', '#5689e5'], lose: ['KAYBETTİ', '#6b6b6b'] }[q.r];
+          bjBadge(p.x, p.y - 50, R[0], R[1]);
+        }
+      } else if (q.w && bjs.ph !== 'idle') {
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.font = 'bold 14px Nunito, Trebuchet MS, sans-serif';
+        ctx.fillText('Sonraki eli bekliyor', p.x, p.y);
+      }
+    }
+    // Koltuk alanları
+    const hover = joined && !inMatch() && !inRace() && !inVb() && !inHk() && !inTank() && !watching ? me : null;
+    const over = (pad) => hover && W.inRect(hover.x, hover.y, pad);
+    const my = bjMySeat();
+    for (let i = 0; i < BJ.seats; i++) {
+      const pad = BJP['s' + i], q = bjs && bjs.s[i];
+      const pl = q && players.get(q.id);
+      const turn = q && bjs.ph === 'turns' && bjs.turn === i;
+      if (!q) padBox(pad, '#a8916b', `🪑 Koltuk ${i + 1}`, ['(boş — tıkla, otur)'], over(pad));
+      else if (i === my) padBox(pad, turn ? '#f0a93b' : '#2e8b57', `✓ ${pl ? pl.name : 'Sen'}`, [turn ? `Sıra sende · ${Math.ceil(left / 1000)} sn` : 'Kalkmak için tıkla'], over(pad));
+      else padBox(pad, turn ? '#f0a93b' : '#7b5e3b', pl ? pl.name : '…', [turn ? `Oynuyor · ${Math.ceil(left / 1000)} sn` : q.w ? 'Bekliyor' : 'Masada'], over(pad));
+    }
+    // Hamle alanları
+    const myTurn = bjMyTurn();
+    padBox(BJP.hit, myTurn ? '#2e9e5b' : '#8a8a8a', '➕ Kart Çek', [myTurn ? 'Space / W' : 'Sıran gelince'], over(BJP.hit));
+    padBox(BJP.stand, myTurn ? '#c0392b' : '#8a8a8a', '✋ Dur', [myTurn ? 'S' : 'Sıran gelince'], over(BJP.stand));
+    const seated = bjs ? bjs.s.filter(Boolean).length : 0;
+    let title = '🃏 Dağıt', lines, fill = '#f0a93b';
+    if (!bjs || bjs.ph === 'idle') lines = seated ? [`${seated}/${BJ.seats} oyuncu · eli başlat`] : ['Önce koltuğa otur'];
+    else if (bjs.ph === 'result') { title = '🃏 Yeni el'; fill = '#8a8a8a'; lines = [`${Math.ceil(left / 1000)} sn sonra`]; }
+    else { title = '🃏 El sürüyor'; fill = '#8a8a8a'; lines = [bjs.ph === 'dealer' ? 'Krupiye oynuyor' : bjs.ph === 'deal' ? 'Kartlar dağıtılıyor' : 'Oyuncular oynuyor']; }
+    padBox(BJP.deal, fill, title, lines, over(BJP.deal));
+    ctx.fillStyle = 'rgba(59,47,36,0.75)';
+    ctx.font = '600 14px Nunito, Trebuchet MS, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText('🃏 Koltuğa tıkla otur · Dağıt · sıran gelince Space/W kart çek, S dur · krupiyeyi geçen +1 puan · L masadan kalk', cx, BJP.deal.y + BJP.deal.h + 16);
+  }
+
   // ---------- İzleyici modu ----------
   // Oyunda olmayan oyuncu süren bir maçı izleyebilir: kamera sahayı ortalar, ekrana sığmıyorsa
   // uzaklaşır (imleç olduğu yerde kalır). Yarışta öndeki aracı takip eder.
@@ -3962,8 +4240,9 @@
     ['h', '🏒 Hokey', () => lobby.hRunning],
     ['t', '💣 Tank', () => lobby.tRunning],
     ['r', '🏎️ Yarış', () => lobby.raceRunning],
+    ['b', '🃏 Blackjack', () => !!bjs && bjs.ph !== 'idle' && !inBj()],
   ];
-  const WATCH_RECT = { f: W.FIELD, v: W.VFIELD, h: W.HFIELD, t: W.TFIELD };
+  const WATCH_RECT = { f: W.FIELD, v: W.VFIELD, h: W.HFIELD, t: W.TFIELD, b: W.BJFIELD };
   let watching = null, watchKey = '';
   function watchable() {
     if (!joined || inMatch() || inRace() || inVb() || inHk() || inTank()) return [];
@@ -4159,6 +4438,7 @@
     drawVolley(time, vp);
     drawHockey(time, hp);
     drawTankGame(time, tp, dt);
+    drawBlackjack(time);
     drawBotPads();
 
     const rt = time - INTERP_DELAY;

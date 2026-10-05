@@ -471,6 +471,11 @@
       tone({ f: 880, dur: 0.06, vol: 0.1, type: 'square', delay: 0.09 });
     },
     // Arayüz
+    // Kart: masaya kayan kağıt hışırtısı + hafif tık
+    card() {
+      burst({ filter: 'highpass', f: 2600, f2: 1400, q: 0.7, dur: 0.07, vol: 0.12 });
+      tone({ f: 1400, f2: 900, dur: 0.03, vol: 0.04, type: 'triangle', delay: 0.05 });
+    },
     click() { tone({ f: 1100, f2: 700, dur: 0.06, vol: 0.12, type: 'triangle' }); },
     chat() { tone({ f: 988, dur: 0.08, vol: 0.06 }); tone({ f: 1319, dur: 0.1, vol: 0.05, delay: 0.06 }); },
     pop(v, pan) { tone({ f: 380, f2: 950, dur: 0.09, vol: 0.13 * clamp(v, 0, 1), pan, glide: 0.06 }); },

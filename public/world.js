@@ -148,6 +148,48 @@
     start: { x: TK.x + TK.w / 2 + 30, y: TK.y + TK.h + 40, w: 220, h: 90 },
   };
 
+  // Blackjack masası: buz pistiyle yarış pistinin arasındaki kumsalda. Krupiye üstte (düz kenar),
+  // 5 koltuk alttaki yay boyunca; koltuk 0 en sağda (krupiyenin solu), sıra sağdan sola gider.
+  const BJ = {
+    cx: 5300, top: 300, rx: 480, ry: 440, // masa: üst kenar düz, alt yarısı elips
+    seats: 5,
+    turnSeconds: 20, // sırası gelen bu sürede oynamazsa "Dur" sayılır
+    dealMs: 320, dealerMs: 750, // kart dağıtma / krupiye kart çekme aralığı
+    resultSeconds: 6, // sonuçlar görünür, sonra masada oyuncu varsa yeni el kendiliğinden başlar
+    idleKick: 2, // üst üste bu kadar el hiç oynamayan masadan kalkar
+    reshuffleBelow: 20, // el başında destede bundan az kart kaldıysa deste yeniden karılır
+  };
+  BJ.seatAngle = (i) => ((30 + i * 30) * Math.PI) / 180;
+  BJ.seatPos = (i, k) => ({ x: BJ.cx + Math.cos(BJ.seatAngle(i)) * BJ.rx * k, y: BJ.top + Math.sin(BJ.seatAngle(i)) * BJ.ry * k });
+  const BJPADS = {};
+  for (let i = 0; i < BJ.seats; i++) {
+    const c = BJ.seatPos(i, 1.13);
+    BJPADS['s' + i] = { x: Math.round(c.x - 80), y: Math.round(c.y - 34), w: 160, h: 68 };
+  }
+  {
+    const y = Math.round(BJ.top + BJ.ry * 1.13 + 80);
+    BJPADS.hit = { x: BJ.cx - 340, y, w: 200, h: 84 };
+    BJPADS.deal = { x: BJ.cx - 100, y, w: 200, h: 84 };
+    BJPADS.stand = { x: BJ.cx + 140, y, w: 200, h: 84 };
+  }
+  const BJFIELD = { x: BJ.cx - BJ.rx - 140, y: BJ.top - 90, w: BJ.rx * 2 + 280, h: BJPADS.deal.y + 84 + 40 - (BJ.top - 90) };
+  // Kart: 0–51 → rank = c % 13 (0 = As … 12 = Papaz), suit = c / 13 (♠ ♥ ♦ ♣)
+  BJ.rank = (c) => ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'][c % 13];
+  BJ.suit = (c) => ['♠', '♥', '♦', '♣'][Math.floor(c / 13)];
+  BJ.red = (c) => Math.floor(c / 13) === 1 || Math.floor(c / 13) === 2;
+  // El değeri: asları 11 sayıp 21'i geçerse 1'e indirir. soft = hâlâ 11 sayılan as var
+  BJ.value = (cards) => {
+    let t = 0, aces = 0;
+    for (const c of cards) {
+      if (c < 0) continue; // kapalı kart
+      const r = c % 13;
+      if (r === 0) { aces++; t += 11; } else t += Math.min(10, r + 1);
+    }
+    while (t > 21 && aces) { t -= 10; aces--; }
+    return { t, soft: aces > 0 };
+  };
+  BJ.isBlackjack = (cards) => cards.length === 2 && BJ.value(cards).t === 21;
+
   const LAKE = { cx: 2330, cy: 560, rx: 420, ry: 280, mult: 0.45 };
   const RIVER = {
     width: 110,
@@ -265,7 +307,7 @@
 
   return {
     W, H, CAMP_W, CAMP_H, SPAWN, FIELD, HAX, PADS, toWorld, VB, VFIELD, VPADS, vbToWorld,
-    HK, HFIELD, HPADS, hkToWorld, inRink, botPadList, TK, TFIELD, TPADS,
+    HK, HFIELD, HPADS, hkToWorld, inRink, botPadList, TK, TFIELD, TPADS, BJ, BJPADS, BJFIELD,
     LAKE, RIVER, MUD, ICE, MAX_STEP, COLORS, EMOJI_PALETTE, DEFAULT_QUICK, CHAT_MAX, TREES,
     terrainAt, riverNearest, inEllipse, inRect, isWater,
   };

@@ -13,6 +13,7 @@ const TRACK = require('./public/track.js');
 const RC = require('./public/racing.js');
 const SKINS = require('./public/skins.js');
 const BOTS = require('./bots.js');
+const { Table: BJTable } = require('./blackjack.js');
 
 const PORT = process.env.PORT || 8080;
 const PUBLIC = path.join(__dirname, 'public');
@@ -146,6 +147,11 @@ function moderate(admin, action, target, minutes) {
         setTanker(target, false);
         notice(target, 'Yönetici seni izleyiciye aldı.');
         return `${target.name} tank oyunundan çıkarıldı.`;
+      }
+      if (bjSeated(target)) {
+        bj.leave(target.id, Date.now());
+        notice(target, 'Yönetici seni blackjack masasından kaldırdı.');
+        return `${target.name} blackjack masasından kaldırıldı.`;
       }
       if (target.hteam) {
         setHTeam(target, null);
@@ -290,7 +296,7 @@ function botsIn(g, team) {
 
 // Aynı anda sadece tek oyunda bot olabilir. Botlar başka bir oyunda bekliyorsa (maç yoksa) oradan
 // silinir; o oyunda maç sürüyorsa ekleme reddedilir.
-const GAME_NAMES = { f: 'Futbol', v: 'Voleybol', h: 'Hokey', t: 'Tank', r: 'Yarış' };
+const GAME_NAMES = { f: 'Futbol', v: 'Voleybol', h: 'Hokey', t: 'Tank', r: 'Yarış', b: 'Blackjack' };
 function botGame(p) {
   return p.team ? 'f' : p.vteam ? 'v' : p.hteam ? 'h' : p.tanker ? 't' : p.racer ? 'r' : null;
 }
@@ -481,6 +487,7 @@ function setTeam(p, team) {
     match.removePlayer(p.id);
     teleportOut(p, old);
   }
+  if (team && bjSeated(p)) bj.leave(p.id, Date.now());
   p.team = team;
   chan(p, 'm').queue = [];
   if (match && team) match.addPlayer(p.id, team);
@@ -514,6 +521,7 @@ function setVTeam(p, team) {
     vmatch.removePlayer(p.id);
     teleportOutV(p, old);
   }
+  if (team && bjSeated(p)) bj.leave(p.id, Date.now());
   p.vteam = team;
   chan(p, 'v').queue = [];
   if (vmatch && team) vmatch.addPlayer(p.id, team);
@@ -617,6 +625,7 @@ function setHTeam(p, team) {
     p.y = pad.y + pad.h + 60;
     send(p.ws, { t: 'tp', x: p.x, y: p.y });
   }
+  if (team && bjSeated(p)) bj.leave(p.id, Date.now());
   p.hteam = team;
   chan(p, 'h').queue = [];
   if (hmatch && team) hmatch.addPlayer(p.id, team);
@@ -705,6 +714,7 @@ function setTanker(p, on) {
     if (busy) return notice(p, `${busy} oyunundasın; önce L ile çık.`);
     p.team = p.vteam = p.hteam = null;
     p.racer = false;
+    if (bjSeated(p)) bj.leave(p.id, Date.now());
     p.tanker = true;
     p.tankerAt = Date.now();
     if (tmatch) {
@@ -817,6 +827,7 @@ function setRacer(p, on) {
       p.hteam = null;
     }
     if (p.tanker && !leaveTankLobby(p)) return;
+    if (bjSeated(p)) bj.leave(p.id, Date.now());
     p.racer = true;
     p.racerAt = Date.now();
   } else {
@@ -893,6 +904,7 @@ function removePlayer(p) {
   players.delete(p.id);
   delete scores[p.id];
   if (p.bot) BOTS.forget(p.id);
+  bj.leave(p.id, Date.now());
   if (match) match.removePlayer(p.id);
   if (vmatch) vmatch.removePlayer(p.id);
   if (hmatch) hmatch.removePlayer(p.id);
@@ -981,6 +993,7 @@ wss.on('connection', (ws) => {
       if (hmatch) send(ws, { t: 'hg', ...hmatch.snapshot(hackOf) });
       if (tmatch) send(ws, { t: 'tg', ...tmatch.snapshot(tackOf, me.id), mn: tmatch.minesOf(me.id) });
       if (race) broadcastRace();
+      send(ws, bj.snapshot(Date.now()));
       broadcast({ t: 'join', p: publicPlayer(me) }, me.id); // geri dönende isim/renk değişmiş olabilir
       return;
     }
@@ -1119,11 +1132,31 @@ wss.on('connection', (ws) => {
         else if (me.vteam) setVTeam(me, null);
         else if (me.hteam) setHTeam(me, null);
         else if (me.team) setTeam(me, null);
+        else if (bjSeated(me)) bj.leave(me.id, Date.now());
         break;
       }
       case 'watch': {
         // İzleyici modu: oyunda olmayan oyuncu bir maçı izliyor; o maçın durumu ona sık gönderilir
         me.watch = GAME_NAMES[m.g] ? m.g : null;
+        break;
+      }
+      case 'bpad': {
+        const pad = WORLD.BJPADS[m.pad];
+        if (!pad || !onPad(me, pad) || !allow(me, 'pad', 3, 1000)) return;
+        if (/^s\d$/.test(m.pad)) {
+          const i = +m.pad[1];
+          if (bj.seatOf(me.id) === i) bj.leave(me.id, Date.now());
+          else bjSit(me, i);
+        } else if (m.pad === 'deal') {
+          if (!bjSeated(me)) notice(me, 'Önce bir koltuğa otur.');
+          else if (!bj.canStart()) notice(me, 'El sürüyor; bitince yenisi kendiliğinden başlar.');
+          else bj.start(Date.now());
+        } else bjAct(me, m.pad);
+        break;
+      }
+      case 'bj': {
+        // Klavyeden hamle (Space/W kart çek, S dur); koltukta olmak yeter
+        if ((m.a === 'hit' || m.a === 'stand') && allow(me, 'bj', 6, 1000)) bjAct(me, m.a);
         break;
       }
       case 'png': {
@@ -1405,6 +1438,46 @@ setInterval(() => {
     if (race.phase === 'ended' && Date.now() >= raceEndAt) stopRace();
   }
 }, 4);
+
+// ---------- Blackjack ----------
+// Tek masa, en fazla 5 kişi, bot yok. Krupiye sunucu. Kazanan +1 puan (oyuncu listesindeki puan)
+const BJ = WORLD.BJ;
+const bj = new BJTable({
+  change: () => broadcast(bj.snapshot(Date.now())),
+  notice: (text) => { for (const s of bj.seats) if (s) notice(players.get(s.id) || {}, text); },
+  kick: (id) => {
+    const p = players.get(id);
+    if (p) notice(p, 'İki eldir oynamadığın için masadan kaldırıldın.');
+    bj.leave(id, Date.now());
+  },
+  settled: (results) => {
+    for (const r of results) if ((r.res === 'win' || r.res === 'bj') && scores[r.id] != null) scores[r.id]++;
+    broadcast({ t: 'bjres', results, scores });
+  },
+});
+function bjSeated(p) {
+  return bj.seatOf(p.id) >= 0;
+}
+function bjSit(p, i) {
+  const busy = (match && match.players.has(p.id) && 'Futbol') || (vmatch && vmatch.players.has(p.id) && 'Voleybol') ||
+    (hmatch && hmatch.players.has(p.id) && 'Hokey') || (tmatch && tmatch.players.has(p.id) && 'Tank') ||
+    (race && race.cars.has(p.id) && 'Yarış');
+  if (busy) return notice(p, `${busy} oyunundasın; önce L ile çık.`);
+  if (bj.seatOf(p.id) < 0 && bj.seats.every(Boolean)) return notice(p, `Masa dolu (en fazla ${BJ.seats} kişi).`);
+  const err = bj.sit(p.id, i, Date.now());
+  if (err) return notice(p, err);
+  // Masaya oturan diğer oyunların takım/katılım listelerinden çıkar
+  if (p.team) setTeam(p, null);
+  if (p.vteam) setVTeam(p, null);
+  if (p.hteam) setHTeam(p, null);
+  if (p.tanker) setTanker(p, false);
+  if (p.racer) setRacer(p, false);
+}
+function bjAct(p, a) {
+  const err = bj.act(p.id, a, Date.now());
+  if (err) notice(p, err);
+}
+setInterval(() => bj.step(Date.now()), 50);
 
 // ---------- İmleç yayını (30 Hz) ----------
 setInterval(() => {
