@@ -4239,10 +4239,11 @@
       else if (i === my) padBox(pad, turn ? '#f0a93b' : '#2e8b57', `✓ ${pl ? pl.name : 'Sen'}`, [turn ? `Sıra sende · ${Math.ceil(left / 1000)} sn` : 'Kalkmak için tıkla'], over(pad));
       else padBox(pad, turn ? '#f0a93b' : '#7b5e3b', pl ? pl.name : '…', [turn ? `Oynuyor · ${Math.ceil(left / 1000)} sn` : q.w ? 'Bekliyor' : 'Masada'], over(pad));
     }
-    // Kart Çek / Dur: sıra bendeyse kendi koltuğumun üstünde
-    if (bjMyTurn()) {
-      bjButton(BJP['hit' + my], '#2e9e5b', 'Çek · W', over(BJP['hit' + my]));
-      bjButton(BJP['stand' + my], '#c0392b', 'Dur · S', over(BJP['stand' + my]));
+    // Kart Çek / Dur: oturduğum koltuğun üstünde hep durur; sıra bende değilken gri ve pasif
+    if (my >= 0) {
+      const live = bjMyTurn();
+      bjButton(BJP['hit' + my], live ? '#2e9e5b' : '#9a9a9a', 'Çek · W', live && over(BJP['hit' + my]));
+      bjButton(BJP['stand' + my], live ? '#c0392b' : '#9a9a9a', 'Dur · S', live && over(BJP['stand' + my]));
     }
     // Dağıt: el yokken ortada
     if (bjPadLive('deal')) {
