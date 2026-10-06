@@ -178,51 +178,81 @@ function volley(m, me) {
 }
 
 // ---------- F1 yarışı ----------
-const GRIP = 0.2, BRAKE = 0.062;
+// Önceden hesaplanmış yarış çizgisi (raceline.json): her pist noktası için yanal kayma (n, sol +) ve
+// o noktada gidilebilecek hız (px/tick). Çizgi tur süresini en aza indirecek şekilde optimize edildi
+// (yol genişliğinin tamamı, çim yok); bot gerçek oyuncu gibi sadece W/A/S/D basar.
+// Ölçülen: tek başına uçan tur ≈ 32.7 sn (eski bot ≈ 48 sn).
+const RL = require('./raceline.json');
+const RACE = require('./public/racing.js');
+const LX = new Float64Array(TRACK.N), LY = new Float64Array(TRACK.N);
+for (let i = 0; i < TRACK.N; i++) {
+  LX[i] = TRACK.X[i] + TRACK.TY[i] * RL.n[i];
+  LY[i] = TRACK.Y[i] - TRACK.TX[i] * RL.n[i];
+}
+const RC_CAR = RACE.CAR, RC_VMAX = Math.sqrt(RC_CAR.accel / RC_CAR.drag);
+const BOT_PACE = 1.15, LOOK = 24, LOOK_V = 9, LEAD = 5; // hız katsayısı, bakış mesafesi (px + v·tick), fren öngörüsü
+function turnCap(v) {
+  return RC_CAR.turnRate * Math.min(1, v / 1.8) * (1 - RC_CAR.turnHighSpeedLoss * Math.min(1, v / RC_VMAX));
+}
 const mem = new Map(); // araç id -> {stuck, rev}
 function race(r, c) {
   if (r.phase !== 'race' && r.phase !== 'finish') return 0;
   const st = mem.get(c.id) || { stuck: 0, rev: 0 };
   mem.set(c.id, st);
-  const N = TRACK.N, X = TRACK.X, Y = TRACK.Y;
-  const pr = TRACK.project(c.x, c.y, c.hint);
-  const i = pr ? pr.i : c.hint || 0;
+  const N = TRACK.N;
   const v = Math.hypot(c.vx, c.vy);
-  const step = TRACK.LENGTH / N;
-  // Takılırsa: kısa süre geri vites, ters direksiyon
+  // Takılırsa (çarpışma, duvar): kısa süre geri vites, ters direksiyon
   if (st.rev > 0) {
     st.rev--;
     return DOWN | (st.revSteer > 0 ? LEFT : RIGHT);
   }
-  st.stuck = v < 0.35 ? st.stuck + 1 : 0;
-  // Hedef nokta: hıza göre ileri bak
-  const k = Math.round((30 + v * 11) / step);
-  const j = (i + k) % N;
-  const want = Math.atan2(Y[j] - c.y, X[j] - c.x);
-  let err = want - c.a;
-  while (err > Math.PI) err -= Math.PI * 2;
-  while (err < -Math.PI) err += Math.PI * 2;
-  if (st.stuck > 90) {
-    st.rev = 50;
-    st.revSteer = err;
-    st.stuck = 0;
+  // Çizgide en yakın nokta: son bulunan noktadan ileriye doğru ara (virajda çizgi pist merkezinden uzaklaşır)
+  if (st.idx == null || Math.hypot(LX[st.idx] - c.x, LY[st.idx] - c.y) > 150) st.idx = c.hint || 0;
+  let idx = st.idx, bd = Infinity;
+  for (let o = -20; o <= 40; o++) {
+    const q = (st.idx + o + N) % N, d = (LX[q] - c.x) ** 2 + (LY[q] - c.y) ** 2;
+    if (d < bd) { bd = d; idx = q; }
   }
-  let bits = err > 0.035 ? RIGHT : err < -0.035 ? LEFT : 0;
-  // Viraj hızı: önümüzdeki fren mesafesi içinde, geçilebilecek hızı aşıyorsak fren
-  const look = (v * v) / (2 * BRAKE) + 60;
-  let brake = false;
-  for (let d = 0; d < look; d += step * 2) {
-    const q = (i + Math.round(d / step)) % N;
-    const cv = Math.abs(TRACK.CURV[q]);
-    if (cv < 1e-5) continue;
-    const vmax = Math.sqrt(GRIP / cv) * 0.82;
-    if (v > vmax && (v * v - vmax * vmax) / (2 * BRAKE) > d - 12) {
-      brake = true;
-      break;
+  st.idx = idx;
+  // Önde yakın araç varsa çizginin biraz yanından geç (arkadan çarpmasın)
+  let side = 0;
+  const fx = Math.cos(c.a), fy = Math.sin(c.a);
+  for (const o of r.cars.values()) {
+    if (o === c) continue;
+    const dx = o.x - c.x, dy = o.y - c.y, along = dx * fx + dy * fy, lat = -dx * fy + dy * fx;
+    if (along > 0 && along < 40 + v * 12 && Math.abs(lat) < 22 && Math.hypot(o.vx, o.vy) < v + 0.2) {
+      side = RL.n[idx] > 0 ? -1 : 1; // yolun ortasına doğru kaç
     }
   }
-  if (Math.abs(err) > 0.9 && v > 2.5) brake = true;
-  bits |= brake ? DOWN : UP;
+  // Takip: ileri bakış noktasına yay (pure pursuit) -> istenen direksiyon
+  const Ld = LOOK + v * LOOK_V;
+  let j = idx, acc = 0;
+  while (acc < Ld) { const q = (j + 1) % N; acc += Math.hypot(LX[q] - LX[j], LY[q] - LY[j]); j = q; }
+  let tx = LX[j], ty = LY[j];
+  if (side) { tx += TRACK.TY[j] * side * 26; ty -= TRACK.TX[j] * side * 26; }
+  const dx = tx - c.x, dy = ty - c.y, d = Math.hypot(dx, dy) || 1;
+  let alpha = Math.atan2(dy, dx) - c.a;
+  while (alpha > Math.PI) alpha -= Math.PI * 2;
+  while (alpha < -Math.PI) alpha += Math.PI * 2;
+  st.stuck = v < 0.35 ? st.stuck + 1 : 0;
+  if (st.stuck > 90) {
+    st.rev = 50;
+    st.revSteer = alpha;
+    st.stuck = 0;
+  }
+  const want = Math.max(-1, Math.min(1, ((2 * Math.sin(alpha)) / d) * v / Math.max(1e-4, turnCap(Math.max(v, 0.3)))));
+  // Direksiyon yumuşak tepki verir: bir sonraki tick'te istenen değere en yakın tuşu seç
+  let bits = 0, be = Infinity;
+  for (const [t, b] of [[-1, LEFT], [0, 0], [1, RIGHT]]) {
+    const e = Math.abs(c.steer + (t - c.steer) * RC_CAR.steerResponse - want);
+    if (e < be) { be = e; bits = b; }
+  }
+  // Hız: çizginin hız profili (çimdeysen ya da çizgiden çok uzaksan daha temkinli)
+  let vt = RL.v[(idx + LEAD) % N] * BOT_PACE;
+  if (c.surface === 'grass' || bd > 60 * 60) vt = Math.min(vt, 3.2);
+  if (Math.abs(alpha) > 0.9 && v > 2.5) vt = 0;
+  if (v < vt) bits |= UP;
+  else if (v > vt + 0.04) bits |= DOWN;
   return bits;
 }
 
