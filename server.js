@@ -883,8 +883,7 @@ function syncCursorToCar(p) {
 // Yarış görünümü yarıştan önce seçilir ve o yarıştaki herkes için aynıdır: '2d' kuş bakışı, '3d' kokpit
 let raceMode = '2d';
 function startRace() {
-  race = new RC.Race();
-  race.mode = raceMode;
+  race = new RC.Race(raceMode);
   race.seed = (Date.now() & 0xffff) + 1;
   raceStartedAt = Date.now();
   lastRace = null;

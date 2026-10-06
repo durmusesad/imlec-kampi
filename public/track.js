@@ -171,7 +171,7 @@
   }
 
   // Bir noktanın pistteki yeri: en yakın orta çizgi indeksi, yanal uzaklık (sol +), boyuna konum
-  function project(x, y, hint) {
+  function project(x, y, hint, lim) {
     let best = -1, bd = Infinity;
     if (hint != null && hint >= 0) {
       // Önceki konumun çevresinde ara (araçlar için hızlı yol)
@@ -180,7 +180,7 @@
         const d = (X[i] - x) ** 2 + (Y[i] - y) ** 2;
         if (d < bd) { bd = d; best = i; }
       }
-      if (bd > (HALF + RUNOFF + 40) ** 2) best = -1;
+      if (bd > (lim || HALF + RUNOFF + 40) ** 2) best = -1;
     }
     if (best < 0) {
       bd = Infinity;
@@ -202,17 +202,21 @@
     return { i, lat, s, dist: Math.abs(lat) };
   }
 
-  // Yüzey: 'road' | 'kerb' | 'grass' | 'wall'
-  function surfaceAt(x, y, hint) {
-    const p = project(x, y, hint);
+  // Yüzey: 'road' | 'kerb' | 'grass' | 'wall'. W: yol ölçüleri (2D varsayılan, 3D varyantı kendi ölçüleriyle çağırır)
+  function surfaceWith(W, x, y, hint) {
+    const p = project(x, y, hint, W.HALF + W.RUNOFF + 40);
     if (!p) return { kind: 'out', p: null };
     const d = p.dist;
     let kind = 'grass';
-    if (d <= HALF - KERB_W) kind = 'road';
-    else if (d <= HALF + 2 && isKerb(p.i, p.lat)) kind = 'kerb';
-    else if (d <= HALF) kind = 'road';
-    else if (d >= HALF + RUNOFF) kind = 'wall';
+    if (d <= W.HALF - W.KERB_W) kind = 'road';
+    else if (d <= W.HALF + W.KERB_W / 6 && isKerb(p.i, p.lat)) kind = 'kerb';
+    else if (d <= W.HALF) kind = 'road';
+    else if (d >= W.HALF + W.RUNOFF) kind = 'wall';
     return { kind, p };
+  }
+  const W2D = { HALF, KERB_W, RUNOFF };
+  function surfaceAt(x, y, hint) {
+    return surfaceWith(W2D, x, y, hint);
   }
 
   // Kerbler: belirgin virajların iç ve dış kenarında
@@ -235,12 +239,13 @@
   const SECTORS = 16;
 
   // Start grid: bitiş çizgisinin gerisinde, iki sıra, zikzak
-  function gridSlot(k) {
-    const back = 40 + k * 26; // piksel
+  function gridSlot(k, G) {
+    G = G || { first: 40, gap: 26, half: HALF };
+    const back = G.first + k * G.gap; // piksel
     let s = LENGTH - back;
     let i = 0;
     while (i < N - 1 && S[i + 1] < s) i++;
-    const lat = (k % 2 === 0 ? 1 : -1) * HALF * 0.45;
+    const lat = (k % 2 === 0 ? 1 : -1) * G.half * 0.45;
     const x = X[i] + TY[i] * lat, y = Y[i] - TX[i] * lat;
     return { x, y, a: Math.atan2(TY[i], TX[i]), i };
   }
@@ -258,8 +263,15 @@
     };
   })();
 
+  // 3D yarış varyantı: gerçeğe yakın ölçek (1 px = 0.4 m → pist 5.24 km). Orta çizgi aynı; yol 48 px = 19 m,
+  // kerb 4 px = 1.6 m, kaçış alanı 30 px = 12 m, grid aralığı 8 m. Fizik (racing.js) ve 3D çizim bunu kullanır.
+  const V3D = { M_PER_PX: 0.4, HALF: 24, KERB_W: 4, RUNOFF: 30 };
+  V3D.ROAD_W = V3D.HALF * 2;
+  V3D.surfaceAt = (x, y, hint) => surfaceWith(V3D, x, y, hint);
+  V3D.gridSlot = (k) => gridSlot(k, { first: 15, gap: 20, half: V3D.HALF });
+
   return {
     RAW, N, X, Y, TX, TY, S, CURV, KERB, LENGTH, ROAD_W, HALF, KERB_W, RUNOFF, REGION, SECTORS,
-    project, surfaceAt, isKerb, gridSlot, PADS, SCALE: scale,
+    project, surfaceAt, isKerb, gridSlot, PADS, SCALE: scale, V3D,
   };
 });

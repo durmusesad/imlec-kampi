@@ -44,8 +44,41 @@
 
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
+  // ---------- 3D: gerçekçi F1 fiziği ----------
+  // Hesaplar metre/saniye ile yapılır, pist birimine (px, tick) çevrilir. 1 px = 0.4 m (TRACK.V3D).
+  // Kaynak değerler: ~1000 hp, 798 kg; aerodinamik basınçla artan tutuş ve fren (300 km/h'te ~5 g).
+  const V3 = TRACK.V3D, MPX = V3.M_PER_PX;
+  const MS = 1 / (MPX * TPS); // m/s -> px/tick
+  const MS2 = 1 / (MPX * TPS * TPS); // m/s² -> px/tick²
+  const G = 9.81;
+  const F1 = {
+    length: 5.63, width: 2.0, wheelbase: 3.6,
+    powerPerMass: 800, // W/kg (746 kW / 798 kg, aktarma kayıplarıyla)
+    drag: 0.00094, // a = k·v² (son hız ≈ 340 km/h)
+    roll: 0.15, // m/s² sabit direnç
+    engineBrake: 1.4, // gaz bırakınca (m/s²)
+    traction: (v) => G * (1.08 + 0.00028 * v * v), // boyuna çekiş sınırı
+    brake: (v) => G * (1.7 + 0.00048 * v * v), // fren (aero ile artar)
+    lateral: (v) => G * (1.75 + 0.00038 * v * v), // viraj tutuşu: 100 km/h ~2 g, 300 km/h ~5 g
+    maxLock: 0.3, // direksiyon açısı (rad, ~17°)
+    lockSpeed: 42, // klavye yardımı: hız arttıkça direksiyon açısı azalır (m/s)
+    steerRate: 0.1, // direksiyonun hedefe yaklaşma hızı (tick başı oran)
+    reverse: 6, // geri vites son hızı (m/s)
+  };
+  const SURF3 = {
+    road: { grip: 1, engine: 1, drag: 0 },
+    kerb: { grip: 0.82, engine: 1, drag: 0.4 },
+    grass: { grip: 0.42, engine: 0.45, drag: 4.5 },
+    out: { grip: 0.42, engine: 0.45, drag: 4.5 },
+  };
+  const SLIP3 = { near: 12, far: 100, lateral: 6, dragCut: 0.12 };
+  const CAR_R3 = F1.width / MPX / 2 + 0.3, CAR_OFF3 = F1.length / MPX / 2 - CAR_R3;
+
   class Race {
-    constructor() {
+    // mode: '2d' (kuş bakışı, arcade) ya da '3d' (gerçek ölçek ve F1 fiziği)
+    constructor(mode) {
+      this.mode = mode === '3d' ? '3d' : '2d';
+      this.T = this.mode === '3d' ? V3 : TRACK; // yol ölçüleri, yüzey ve grid
       this.cars = new Map(); // id -> araç
       this.tick = 0;
       this.phase = 'grid'; // grid | lights | race | finish | ended
@@ -58,9 +91,9 @@
     }
 
     addCar(id, color, slot) {
-      const g = TRACK.gridSlot(slot);
+      const g = this.T.gridSlot(slot);
       const c = {
-        id, color, slot,
+        id, color, slot, m3: this.mode === '3d',
         x: g.x, y: g.y, a: g.a, vx: 0, vy: 0, steer: 0,
         input: 0, hint: g.i, surface: 'road',
         lap: 0, sec: TRACK.SECTORS - 1, s: TRACK.S[g.i],
@@ -112,6 +145,7 @@
       }
 
       const list = [...this.cars.values()];
+      const SL = this.mode === '3d' ? SLIP3 : SLIP;
       // 1) Rüzgar arkası: her araç için arkasında olduğu en yakın aracı bul
       for (const c of list) {
         c.slip = 0;
@@ -120,27 +154,27 @@
           if (o === c || o.finished) continue;
           const dx = o.x - c.x, dy = o.y - c.y;
           const along = dx * fx + dy * fy; // öndeki araç önümde mi
-          if (along < SLIP.near || along > SLIP.far) continue;
+          if (along < SL.near || along > SL.far) continue;
           const side = Math.abs(-dx * fy + dy * fx);
-          if (side > SLIP.lateral) continue;
+          if (side > SL.lateral) continue;
           // Aynı yöne gidiyor olmalı
           if (Math.cos(o.a - c.a) < 0.8) continue;
-          const k = 1 - (along - SLIP.near) / (SLIP.far - SLIP.near);
+          const k = 1 - (along - SL.near) / (SL.far - SL.near);
           c.slip = Math.max(c.slip, 0.35 + 0.65 * k);
         }
       }
 
       // 2) Sürüş
-      for (const c of list) this.drive(c);
+      for (const c of list) (this.mode === '3d' ? this.drive3d(c) : this.drive(c));
 
       // 3) Araç-araç çarpışmaları (her araç 2 daire)
       for (let i = 0; i < list.length; i++) {
-        for (let j = i + 1; j < list.length; j++) collideCars(list[i], list[j]);
+        for (let j = i + 1; j < list.length; j++) collideCars(list[i], list[j], this.mode === '3d');
       }
 
       // 4) Pist, tur ve kurallar
       for (const c of list) {
-        const sf = TRACK.surfaceAt(c.x, c.y, c.hint);
+        const sf = this.T.surfaceAt(c.x, c.y, c.hint);
         if (sf.p) {
           c.hint = sf.p.i;
           this.walls(c, sf.p);
@@ -201,9 +235,58 @@
       c.y += c.vy;
     }
 
+    // 3D sürüş: bisiklet modeli direksiyon + hızla artan aero tutuşu; tutuş aşılırsa araç kayar (önden kayma)
+    drive3d(c) {
+      const racing = this.phase === 'race' || this.phase === 'finish';
+      const inp = racing && !c.finished ? c.input : c.finished ? INPUT.DOWN : 0;
+      const sf = SURF3[c.surface] || SURF3.road;
+      const dt = 1 / TPS;
+      let fx = Math.cos(c.a), fy = Math.sin(c.a);
+      const vf0 = c.vx * fx + c.vy * fy, v = Math.abs(vf0) / MS; // m/s
+      // Direksiyon: klavye yumuşak döner; hız arttıkça açı azalır (gerçek araçta da yüksek hızda az kırılır)
+      const target = (inp & INPUT.LEFT ? -1 : 0) + (inp & INPUT.RIGHT ? 1 : 0);
+      c.steer += (target - c.steer) * F1.steerRate;
+      const lock = F1.maxLock / (1 + (v / F1.lockSpeed) ** 2);
+      const delta = c.steer * lock;
+      const latMax = F1.lateral(v) * sf.grip; // m/s²
+      // İstenen dönüş hızı (rad/s) ve tutuşun izin verdiği en fazla
+      let w = (v * Math.tan(delta)) / F1.wheelbase;
+      const wGrip = latMax / Math.max(v, 1);
+      let scrub = 0;
+      if (Math.abs(w) > wGrip * 1.06) {
+        scrub = Math.min(1, Math.abs(w) / (wGrip * 1.06) - 1); // fazla direksiyon: lastik sürtünür, hız kaybı
+        w = Math.sign(w) * wGrip * 1.06;
+      }
+      c.a += w * dt * (vf0 >= 0 ? 1 : -1);
+      fx = Math.cos(c.a);
+      fy = Math.sin(c.a);
+      let vf = c.vx * fx + c.vy * fy;
+      let vl = -c.vx * fy + c.vy * fx;
+      // Boyuna (m/s²)
+      const vm = vf / MS;
+      let a = 0;
+      if (inp & INPUT.UP) {
+        a += Math.min(F1.traction(Math.abs(vm)) * sf.grip, F1.powerPerMass / Math.max(Math.abs(vm), 5)) * sf.engine;
+      }
+      if (inp & INPUT.DOWN) {
+        if (vm > 0.3) a -= Math.min(F1.brake(vm) * sf.grip, vm / dt);
+        else if (vm > -F1.reverse) a -= 4;
+      } else if (!(inp & INPUT.UP)) a -= Math.sign(vm) * Math.min(Math.abs(vm) / dt, F1.engineBrake);
+      const drag = F1.drag * (1 - SLIP3.dragCut * c.slip) * vm * Math.abs(vm) + Math.sign(vm) * (F1.roll + sf.drag + scrub * 4);
+      a -= Math.abs(drag) > Math.abs(vm) / dt ? vm / dt : drag;
+      vf += a * MS2;
+      // Yanal: tutuş kadar sönümlenir; aşılırsa araç kayar
+      const gl = latMax * MS2;
+      vl -= Math.sign(vl) * Math.min(Math.abs(vl), gl);
+      c.vx = vf * fx - vl * fy;
+      c.vy = vf * fy + vl * fx;
+      c.x += c.vx;
+      c.y += c.vy;
+    }
+
     // Lastik bariyerleri: kaçış alanının sonunda sert duvar
     walls(c, p) {
-      const lim = TRACK.HALF + TRACK.RUNOFF - CAR_R;
+      const lim = this.T.HALF + this.T.RUNOFF - (this.mode === '3d' ? CAR_R3 : CAR_R);
       if (p.dist <= lim) return;
       const i = p.i;
       const side = p.lat >= 0 ? 1 : -1;
@@ -277,7 +360,7 @@
         p.push([c.id, r(c.x), r(c.y), r(c.a), r(c.vx), r(c.vy), r(c.steer), c.input, c.hint, c.lap, c.sec,
           c.lapStart, c.lastLap, c.bestLap, c.finished, ack, buf, c.slot]);
       }
-      return { n: this.tick, ph: this.phase, tmr: this.timer, go: this.goTick, p };
+      return { n: this.tick, ph: this.phase, tmr: this.timer, go: this.goTick, md: this.mode, p };
     }
 
     load(g) {
@@ -297,16 +380,17 @@
     }
   }
 
-  function collideCars(a, b) {
+  function collideCars(a, b, m3) {
     // Her aracı ön ve arka daire olarak düşün
+    const CR = m3 ? CAR_R3 : CAR_R, CO = m3 ? CAR_OFF3 : CAR_OFF;
     const circles = (c) => {
-      const fx = Math.cos(c.a) * CAR_OFF, fy = Math.sin(c.a) * CAR_OFF;
+      const fx = Math.cos(c.a) * CO, fy = Math.sin(c.a) * CO;
       return [[c.x + fx, c.y + fy], [c.x - fx, c.y - fy]];
     };
     const ca = circles(a), cb = circles(b);
     for (const p of ca) for (const q of cb) {
       const dx = p[0] - q[0], dy = p[1] - q[1];
-      const d2 = dx * dx + dy * dy, rs = CAR_R * 2;
+      const d2 = dx * dx + dy * dy, rs = CR * 2;
       if (d2 >= rs * rs || d2 === 0) continue;
       const d = Math.sqrt(d2), nx = dx / d, ny = dy / d, over = rs - d;
       a.x += nx * over * 0.5; a.y += ny * over * 0.5;
@@ -320,10 +404,11 @@
     }
   }
 
-  // Ekranda gösterilecek hız (km/h): son hız 320 km/h görünür
+  // Ekranda gösterilecek hız (km/h): 2D'de son hız 320 km/h görünür, 3D'de gerçek hız
   function kmh(c) {
+    if (c.m3) return Math.round((Math.hypot(c.vx, c.vy) / MS) * 3.6);
     return Math.round(Math.hypot(c.vx, c.vy) / Math.sqrt(CAR.accel / CAR.drag) * 320);
   }
 
-  return { Race, INPUT, TPS, CAR, LAPS, MAX_CARS, kmh, SLIP };
+  return { Race, INPUT, TPS, CAR, LAPS, MAX_CARS, kmh, SLIP, F1, MS, MS2 };
 });

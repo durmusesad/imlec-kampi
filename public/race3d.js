@@ -7,7 +7,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 const T = window.TRACK, TD = window.TRACKDRAW;
-const S = 0.2; // m / px
+const TW = T.V3D; // 3D yol ölçüleri (gerçeğe yakın): yol 19 m, kerb 1.6 m, kaçış 12 m
+const S = TW.M_PER_PX; // m / px (0.4 → pist 5.24 km)
+const CAR_LEN = 5.63; // gerçek F1 uzunluğu (m); model bu boya ölçeklenir
 const QUALITY = {
   dusuk: { ratio: 0.7, aa: false, shadow: 0, env: false, fogNear: 70, fogFar: 380, trees: 0.3, std: false },
   orta: { ratio: 1.0, aa: true, shadow: 1024, env: false, fogNear: 110, fogFar: 650, trees: 0.65, std: true },
@@ -194,6 +196,9 @@ function prepModel(gltf) {
   holder.rotation.y = -yaw;
   root.add(holder);
   root.updateMatrixWorld(true);
+  const b1 = new THREE.Box3().setFromObject(root);
+  holder.scale.setScalar(CAR_LEN / (b1.max.x - b1.min.x)); // modelin kendi birimi ne olursa olsun gerçek boy
+  root.updateMatrixWorld(true);
   const b2 = new THREE.Box3().setFromObject(root);
   holder.position.y = -b2.min.y;
   root.updateMatrixWorld(true);
@@ -277,7 +282,7 @@ export function create(quality) {
   scene.add(world);
   function buildWorld() {
     world.clear();
-    const H = T.HALF, K = T.KERB_W, RO = T.RUNOFF, R = T.REGION;
+    const H = TW.HALF, K = TW.KERB_W, RO = TW.RUNOFF, R = T.REGION;
     // Zemin (çim)
     const grassTex = canvasTex(256, 256, (c, w, h) => noise(c, w, h, '#4f7d33', 60, 9000, 7), true);
     grassTex.repeat.set(R.w * S / 12, R.h * S / 12);
@@ -301,13 +306,13 @@ export function create(quality) {
     world.add(road);
     // Beyaz kenar çizgileri
     const lineMat = mat(0xf2f2f2, 0.8, 0, { polygonOffset: true, polygonOffsetFactor: -3 });
-    for (const side of [1, -1]) world.add(new THREE.Mesh(ribbon(side * (H - 2.5), side * H, 0.025), lineMat));
+    for (const side of [1, -1]) world.add(new THREE.Mesh(ribbon(side * (H - 1.1), side * (H - 0.2), 0.025), lineMat)); // ~0.35 m beyaz çizgi
     // Kerbler: virajlarda kırmızı-beyaz
     const red = new THREE.Color(0xd8262b), white = new THREE.Color(0xf4f4f4);
     const kerbMat = mat(0xffffff, 0.7, 0, { vertexColors: true, polygonOffset: true, polygonOffsetFactor: -4 });
     for (const side of [1, -1]) {
       const bit = side > 0 ? 1 : 2;
-      const g = ribbon(side * (H - K), side * (H + 2), 0.04, {
+      const g = ribbon(side * (H - K), side * (H + K / 6), 0.04, {
         keep: (i) => !!(T.KERB[i] & bit),
         color: (i) => (Math.floor(i / 2) % 2 ? red : white),
       });
@@ -324,17 +329,17 @@ export function create(quality) {
       for (let x = 0; x < 16; x++) for (let y = 0; y < 4; y++) { c.fillStyle = (x + y) % 2 ? '#111' : '#fff'; c.fillRect(x * 4, y * 4, 4, 4); }
     });
     chk.magFilter = THREE.NearestFilter;
-    const fin = new THREE.Mesh(new THREE.PlaneGeometry(T.ROAD_W * S, 1.6), mat(0xffffff, 0.8, 0, { map: chk, polygonOffset: true, polygonOffsetFactor: -5 }));
+    const fin = new THREE.Mesh(new THREE.PlaneGeometry(TW.ROAD_W * S, 1.6), mat(0xffffff, 0.8, 0, { map: chk, polygonOffset: true, polygonOffsetFactor: -5 }));
     fin.rotation.x = -Math.PI / 2;
     fin.rotation.z = -Math.atan2(T.TY[0], T.TX[0]) + Math.PI / 2;
     fin.position.set(T.X[0] * S, 0.03, T.Y[0] * S);
     world.add(fin);
     for (let k = 0; k < 12; k++) {
-      const g = T.gridSlot(k);
-      const box = new THREE.Mesh(new THREE.PlaneGeometry(0.5, 2.4), lineMat);
+      const g = TW.gridSlot(k);
+      const box = new THREE.Mesh(new THREE.PlaneGeometry(0.4, 2.6), lineMat);
       box.rotation.x = -Math.PI / 2;
       box.rotation.z = -g.a;
-      box.position.set((g.x + Math.cos(g.a) * 16) * S, 0.03, (g.y + Math.sin(g.a) * 16) * S);
+      box.position.set((g.x + Math.cos(g.a) * 8) * S, 0.03, (g.y + Math.sin(g.a) * 8) * S);
       world.add(box);
     }
     // Tribünler: basamaklı, seyirci dokulu
@@ -350,21 +355,23 @@ export function create(quality) {
     const roofMat = mat(0xd9dde3, 0.5, 0.3);
     for (const st of TD.STANDS) {
       const N = T.N, len = (st.i1 - st.i0 + N) % N;
+      const gap = TW.HALF + TW.RUNOFF + 6; // 3D yolun bariyerinin hemen ardı
+      const seg = 6 * (T.LENGTH / N) * S + 0.3; // 6 noktalık parça boyu (m), aralıksız
       for (let k = 0; k < len; k += 6) {
         const i = (st.i0 + k) % N, ang = Math.atan2(T.TY[i], T.TX[i]);
         for (let row = 0; row < 4; row++) {
-          const off = st.side * (st.gap + 8 + row * (TD.STAND_DEPTH / 4));
-          const h = 2 + row * 2.2;
-          const b = new THREE.Mesh(new THREE.BoxGeometry(6.4, h, TD.STAND_DEPTH * S / 4), standMat);
+          const off = st.side * (gap + 4 + row * (TD.STAND_DEPTH / 4));
+          const h = 3 + row * 3;
+          const b = new THREE.Mesh(new THREE.BoxGeometry(seg, h, TD.STAND_DEPTH * S / 4), standMat);
           b.position.set(ox(i, off), h / 2, oz(i, off));
           b.rotation.y = -ang;
           b.castShadow = Q.shadow > 1024;
           b.receiveShadow = !!Q.shadow;
           world.add(b);
         }
-        const roof = new THREE.Mesh(new THREE.BoxGeometry(6.4, 0.25, TD.STAND_DEPTH * S + 2), roofMat);
-        const offR = st.side * (st.gap + 8 + TD.STAND_DEPTH / 2);
-        roof.position.set(ox(i, offR), 11.5, oz(i, offR));
+        const roof = new THREE.Mesh(new THREE.BoxGeometry(seg, 0.3, TD.STAND_DEPTH * S + 2), roofMat);
+        const offR = st.side * (gap + 4 + TD.STAND_DEPTH / 2);
+        roof.position.set(ox(i, offR), 15.5, oz(i, offR));
         roof.rotation.y = -ang;
         world.add(roof);
       }
@@ -375,7 +382,7 @@ export function create(quality) {
     const trunk = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.18, 0.25, 1.6, 6), mat(0x6b4a2b, 1, 0), trees.length);
     const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), p = new THREE.Vector3();
     trees.forEach(([x, y, r], k) => {
-      const s = r * S * 1.6;
+      const s = 2.5 + r * 0.12; // taç yüksekliği ≈ 2.6·s → 10–16 m
       m4.compose(p.set(x * S, 1.6 * s * 0.5 + s * 1.3, y * S), q, sc.set(s, s, s));
       crown.setMatrixAt(k, m4);
       m4.compose(p.set(x * S, 0.8 * s, y * S), q, sc.set(s, s, s));
@@ -527,12 +534,12 @@ export function create(quality) {
         camera.lookAt(hx + fx * 30, ay - 4.2 - cam.lon * 0.02, hz + fz * 30);
         camera.fov = 56 + Math.min(6, v / 15);
       } else {
-        const want = new THREE.Vector3(me.x * S - fx * 9.5, 3.1, me.y * S - fz * 9.5);
+        const want = new THREE.Vector3(me.x * S - fx * 6.8, 2.3, me.y * S - fz * 6.8);
         if (!cam.chase) cam.chase = want.clone();
         cam.chase.lerp(want, 1 - Math.exp(-dt * 8));
         camera.position.copy(cam.chase);
         camera.up.set(0, 1, 0);
-        camera.lookAt(me.x * S + fx * 6, 0.9, me.y * S + fz * 6);
+        camera.lookAt(me.x * S + fx * 8, 0.8, me.y * S + fz * 8);
         camera.fov = 70 + Math.min(8, v / 12);
       }
       camera.updateProjectionMatrix();

@@ -197,6 +197,7 @@ function turnCap(v) {
 const mem = new Map(); // araç id -> {stuck, rev}
 function race(r, c) {
   if (r.phase !== 'race' && r.phase !== 'finish') return 0;
+  if (r.mode === '3d') return race3d(r, c);
   const st = mem.get(c.id) || { stuck: 0, rev: 0 };
   mem.set(c.id, st);
   const N = TRACK.N;
@@ -253,6 +254,73 @@ function race(r, c) {
   if (Math.abs(alpha) > 0.9 && v > 2.5) vt = 0;
   if (v < vt) bits |= UP;
   else if (v > vt + 0.04) bits |= DOWN;
+  return bits;
+}
+
+// 3D yarış botu: gerçek ölçek ve F1 fiziği (racing.js drive3d) için ayrı çizgi (raceline3d.json, yol ±15 px içinde).
+// Hız profili 3D fiziğinden; BOT3_PACE 0.97 → uçan tur ≈ 1:24.6 (Istanbul Park gerçek rekoru 1:24.8). 1.0'da ≈ 1:22.6.
+const RL3 = require('./raceline3d.json');
+const L3X = new Float64Array(TRACK.N), L3Y = new Float64Array(TRACK.N);
+for (let i = 0; i < TRACK.N; i++) {
+  L3X[i] = TRACK.X[i] + TRACK.TY[i] * RL3.n[i];
+  L3Y[i] = TRACK.Y[i] - TRACK.TX[i] * RL3.n[i];
+}
+const F1 = RACE.F1, MS3 = RACE.MS;
+const BOT3_PACE = 0.97, LOOK3 = 20, LOOK3_V = 20, LEAD3 = 3;
+const mem3 = new Map();
+function race3d(r, c) {
+  const st = mem3.get(c.id) || { stuck: 0, rev: 0 };
+  mem3.set(c.id, st);
+  const N = TRACK.N;
+  const v = Math.hypot(c.vx, c.vy), vm = v / MS3;
+  if (st.rev > 0) {
+    st.rev--;
+    return DOWN | (st.revSteer > 0 ? LEFT : RIGHT);
+  }
+  if (st.idx == null || Math.hypot(L3X[st.idx] - c.x, L3Y[st.idx] - c.y) > 80) st.idx = c.hint || 0;
+  let idx = st.idx, bd = Infinity;
+  for (let o = -10; o <= 30; o++) {
+    const q = (st.idx + o + N) % N, d = (L3X[q] - c.x) ** 2 + (L3Y[q] - c.y) ** 2;
+    if (d < bd) { bd = d; idx = q; }
+  }
+  st.idx = idx;
+  // Önde yakın ve yavaş araç: çizginin 3 m yanından geç
+  let side = 0;
+  const fx = Math.cos(c.a), fy = Math.sin(c.a);
+  for (const o of r.cars.values()) {
+    if (o === c) continue;
+    const dx = o.x - c.x, dy = o.y - c.y, along = dx * fx + dy * fy, lat = -dx * fy + dy * fx;
+    if (along > 0 && along < 15 + v * 10 && Math.abs(lat) < 6 && Math.hypot(o.vx, o.vy) < v + 0.05) side = RL3.n[idx] > 0 ? -1 : 1;
+  }
+  const Ld = LOOK3 + v * LOOK3_V;
+  let j = idx, acc = 0;
+  while (acc < Ld) { const q = (j + 1) % N; acc += Math.hypot(L3X[q] - L3X[j], L3Y[q] - L3Y[j]); j = q; }
+  let tx = L3X[j], ty = L3Y[j];
+  if (side) { tx += TRACK.TY[j] * side * 8; ty -= TRACK.TX[j] * side * 8; }
+  const dx = tx - c.x, dy = ty - c.y, d = Math.hypot(dx, dy) || 1;
+  let al = Math.atan2(dy, dx) - c.a;
+  while (al > Math.PI) al -= Math.PI * 2;
+  while (al < -Math.PI) al += Math.PI * 2;
+  st.stuck = vm < 1.5 ? st.stuck + 1 : 0;
+  if (st.stuck > 90) {
+    st.rev = 50;
+    st.revSteer = al;
+    st.stuck = 0;
+  }
+  // İstenen eğrilik -> direksiyon açısı -> tuş (direksiyon yumuşak döndüğü için bir sonraki tick'e göre seç)
+  const kap = (2 * Math.sin(al)) / d / TRACK.V3D.M_PER_PX;
+  const lock = F1.maxLock / (1 + (vm / F1.lockSpeed) ** 2);
+  const want = Math.max(-1, Math.min(1, Math.atan(kap * F1.wheelbase) / lock));
+  let bits = 0, be = Infinity;
+  for (const [t, b] of [[-1, LEFT], [0, 0], [1, RIGHT]]) {
+    const e = Math.abs(c.steer + (t - c.steer) * F1.steerRate - want);
+    if (e < be) { be = e; bits = b; }
+  }
+  let vt = RL3.v[(idx + LEAD3) % N] * BOT3_PACE;
+  if (c.surface === 'grass' || bd > 20 * 20) vt = Math.min(vt, 40 * MS3);
+  if (Math.abs(al) > 0.9 && vm > 15) vt = 0;
+  if (v < vt) bits |= UP;
+  else if (v > vt + 0.02) bits |= DOWN;
   return bits;
 }
 
@@ -349,6 +417,7 @@ function tank(m, me) {
 
 function forget(id) {
   mem.delete(id);
+  mem3.delete(id);
 }
 
 module.exports = { football, hockey, volley, race, tank, forget };

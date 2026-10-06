@@ -1111,7 +1111,7 @@
     rmeta = g;
     if (!lobby.raceRunning) return;
     if (!rsim) {
-      rsim = new RC.Race();
+      rsim = new RC.Race(g.md);
       rsim.load(g);
       rpending = [];
       rprev = rPositions();
