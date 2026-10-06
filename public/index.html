@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>İmleç Kampı</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏕️</text></svg>">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
 <style>
   :root {
     --ink: #3b2f24;
@@ -270,6 +276,10 @@
   .srow { display: grid; grid-template-columns: 90px 1fr 44px; align-items: center; gap: 10px; font-weight: 800; }
   .srow input[type=range] { width: 100%; accent-color: var(--accent); }
   .srow output { text-align: right; font-variant-numeric: tabular-nums; opacity: .75; }
+  #gfxOpts { display: flex; flex-direction: column; gap: 8px; }
+  #gfxOpts .mbtn { display: flex; flex-direction: column; gap: 2px; }
+  #gfxOpts .mbtn small { font-weight: 600; font-size: 12px; opacity: .7; }
+  #gfxOpts .mbtn.sel { background: var(--ink); color: var(--paper); }
   .scheck { display: flex; align-items: center; justify-content: space-between; font-weight: 800; padding: 4px 0 6px; }
   .scheck input { width: 20px; height: 20px; accent-color: var(--accent); }
   #keys .cols { display: flex; gap: 28px; }
@@ -396,6 +406,7 @@
     <span class="k"><kbd>A</kbd><kbd>D</kbd><span class="or">/</span><kbd>←</kbd><kbd>→</kbd></span><span class="lbl">Direksiyon</span>
     <span class="k"><kbd>T</kbd></span><span class="lbl">Sohbet</span>
     <span class="k"><kbd>L</kbd></span><span class="lbl">Yarıştan çık</span>
+    <span class="k"><kbd>C</kbd></span><span class="lbl">3D'de kamera: kokpit / arkadan</span>
     <span class="k"><kbd>Q</kbd></span><span class="lbl">Oyunu durdur (normal imleç)</span>
     <span class="k"><kbd>M</kbd></span><span class="lbl">Sesi aç / kapat</span>
   </div></section>
@@ -461,6 +472,7 @@
       <button class="go" id="mResume">▶ Devam et</button>
       <button class="mbtn" data-go="controls">🎮 Kontroller</button>
       <button class="mbtn" data-go="sound">🔊 Ses ayarları</button>
+      <button class="mbtn" data-go="graphics">🖥️ Grafik ayarları</button>
       <button class="mbtn" id="mEmoji">😀 Hızlı emojiler</button>
       <p class="mhint"><kbd>Q</kbd> oyunu durdur · <kbd>H</kbd> kısayollar · <kbd>Tab</kbd> oyuncu listesi<br>Sahaya çift tıklayınca da devam eder</p>
     </div>
@@ -468,6 +480,15 @@
       <div class="mhead"><button class="mback">← Geri</button><h3>Kontroller</h3></div>
       <div id="ctrlTabs"></div>
       <div id="ctrlBody"></div>
+    </div>
+    <div class="mview hidden" data-v="graphics">
+      <div class="mhead"><button class="mback">← Geri</button><h3>Grafik ayarları</h3></div>
+      <div id="gfxOpts">
+        <button class="mbtn" data-q="dusuk"><b>Düşük</b><small>Zayıf bilgisayarlar: düşük çözünürlük, gölge ve yansıma yok, kısa görüş</small></button>
+        <button class="mbtn" data-q="orta"><b>Orta</b><small>Önerilen: kenar yumuşatma, araç gölgeleri, orta görüş mesafesi</small></button>
+        <button class="mbtn" data-q="yuksek"><b>Yüksek</b><small>Güçlü bilgisayarlar: tam çözünürlük, yumuşak gölgeler, yansımalar, uzak görüş</small></button>
+      </div>
+      <p class="mhint">3D yarış görünümünde geçerlidir. Yarış lobisindeki <b>Görünüm</b> alanından yarış 2D ya da 3D seçilir.</p>
     </div>
     <div class="mview hidden" data-v="sound">
       <div class="mhead"><button class="mback">← Geri</button><h3>Ses ayarları</h3></div>

@@ -254,6 +254,7 @@
     return {
       join: { x: Math.round(cx - 250), y: Math.round(cy - 45), w: 220, h: 90 },
       start: { x: Math.round(cx + 30), y: Math.round(cy - 45), w: 220, h: 90 },
+      mode: { x: Math.round(cx + 280), y: Math.round(cy - 45), w: 180, h: 90 },
     };
   })();
 

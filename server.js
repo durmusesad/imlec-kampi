@@ -410,7 +410,7 @@ function racerIds() {
 function lobbyState() {
   return {
     t: 'lobby', red: teamIds('red'), blue: teamIds('blue'), running: !!match, last: lastResult,
-    racers: racerIds(), raceRunning: !!race, raceLast: lastRace,
+    racers: racerIds(), raceRunning: !!race, raceLast: lastRace, rmode: race ? race.mode : raceMode,
     vred: vteamIds('red'), vblue: vteamIds('blue'), vRunning: !!vmatch, vLast: vLastResult,
     hred: hteamIds('red'), hblue: hteamIds('blue'), hRunning: !!hmatch, hLast: hLastResult,
     tankers: tankerIds(), tRunning: !!tmatch, tLast,
@@ -854,8 +854,11 @@ function syncCursorToCar(p) {
   p.y = c.y;
 }
 
+// Yarış görünümü yarıştan önce seçilir ve o yarıştaki herkes için aynıdır: '2d' kuş bakışı, '3d' kokpit
+let raceMode = '2d';
 function startRace() {
   race = new RC.Race();
+  race.mode = raceMode;
   race.seed = (Date.now() & 0xffff) + 1;
   raceStartedAt = Date.now();
   lastRace = null;
@@ -1106,6 +1109,11 @@ wss.on('connection', (ws) => {
             moderate(me, 'stoprace');
           } else if (!racerIds().length) notice(me, 'Önce yarışa katılan olmalı.');
           else startRace();
+        } else if (m.pad === 'mode') {
+          if (race) return notice(me, 'Yarış sürüyor; görünüm yarıştan önce seçilir.');
+          raceMode = raceMode === '3d' ? '2d' : '3d';
+          broadcastLobby();
+          broadcast({ t: 'notice', text: `🏁 Yarış görünümü: ${raceMode === '3d' ? '3D kokpit' : '2D kuş bakışı'} (bütün pilotlar için)` });
         }
         break;
       }

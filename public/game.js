@@ -13,7 +13,7 @@
   let inputDelayTicks = 2;
 
   const canvas = document.getElementById('c');
-  const ctx = canvas.getContext('2d', { alpha: false });
+  const ctx = canvas.getContext('2d'); // şeffaf: 3D yarışta altındaki Three.js katmanı görünsün
   const $ = (id) => document.getElementById(id);
 
   const store = {
@@ -158,6 +158,7 @@
     $('menuCard').classList.toggle('wide', v === 'controls');
     if (v === 'controls') buildControls();
     if (v === 'sound') syncSoundUi();
+    if (v === 'graphics') syncGfxUi();
   }
   $('mResume').onclick = () => { SFX.init(); requestLock(); };
   $('mEmoji').onclick = () => openEmojiPanel();
@@ -477,6 +478,9 @@
       case 'Tab':
         e.preventDefault();
         togglePlayers();
+        return;
+      case 'KeyC':
+        if (R3D && r3dShown) toast(R3D.toggleCam() === 'kokpit' ? '🎥 Kokpit kamerası' : '🎥 Arka kamera');
         return;
     }
     const n = /^Digit([1-8])$/.exec(e.code);
@@ -1176,7 +1180,7 @@
   }
 
   function drawRacePads() {
-    if (!inView(TR.PADS.join.x + 250, TR.PADS.join.y, 500)) return;
+    if (!inView(TR.PADS.join.x + 350, TR.PADS.join.y, 600)) return;
     const hover = joined && !inMatch() && !inRace() ? me : null;
     const racers = lobby.racers || [];
     const running = !!lobby.raceRunning;
@@ -1186,6 +1190,8 @@
       ['start', running ? '#8a8a8a' : '#f0a93b',
         !running ? '▶ Yarışı Başlat' : isAdmin ? '⏹ Yarışı Bitir' : '🏁 Yarış sürüyor',
         running ? [isAdmin ? 'Yönetici olarak bitir' : 'Sadece yönetici bitirebilir'] : [`${racers.length} pilot hazır · ${RC.LAPS} tur`]],
+      ['mode', lobby.rmode === '3d' ? '#5b3fb5' : '#3a6ea5', `🎥 Görünüm: ${lobby.rmode === '3d' ? '3D' : '2D'}`,
+        [lobby.rmode === '3d' ? 'Kokpit kamerası' : 'Kuş bakışı', running ? 'Yarış sürüyor' : 'Tıkla, değiştir (herkes için)']],
     ];
     for (const [name, fill, title, lines] of pads) {
       const pad = TR.PADS[name];
@@ -3047,6 +3053,7 @@
       get rr() { return lastRr; }, get rsim() { return rsim; }, get rpending() { return rpending; },
       get hsim() { return hsim; }, get hpending() { return hpending; },
       get tsim() { return tsim; },
+      get r3d() { return R3D; },
       get bjs() { return bjs; }, bjTurn: () => ({ mine: bjMyTurn(), v: bjs && bjMySeat() >= 0 ? BJ.value(bjs.s[bjMySeat()].c).t : 0 }),
       get watching() { return watching; }, cycleWatch: () => cycleWatch(), get cam() { return cam; }, get zoom() { return zoom; },
       get vsim() { return vsim; }, get vpending() { return vpending; }, aim, setMouse: (b) => { mouseBits = b; }, get bits() { return inputBits(); },
@@ -4472,6 +4479,33 @@
     ctx.fillText('🃏 Koltuğa tıkla otur · her el Dağıt ile başlar · sıran gelince Space/W kart çek, S dur · krupiyeyi geçen +1 puan · L masadan kalk', cx, BJP.s2.y + BJP.s2.h + 16);
   }
 
+  // ---------- 3D yarış görünümü ----------
+  // Yarış 3D seçildiyse (lobby.rmode) yarışan oyuncu Three.js sahnesini görür; modül ilk kullanımda yüklenir
+  let R3D = null, r3dLoading = false, r3dFailed = false, r3dShown = false;
+  let gfx = store.get('imlec-kampi:grafik', 'orta');
+  function want3d() {
+    return !r3dFailed && !!lobby.raceRunning && lobby.rmode === '3d' && inRace() && !watching;
+  }
+  function ensure3d() {
+    if (R3D || r3dLoading) return;
+    r3dLoading = true;
+    toast('🏎️ 3D pist yükleniyor…');
+    import('./race3d.js').then((m) => { R3D = m.create(gfx); }).catch((e) => {
+      console.error(e);
+      r3dFailed = true;
+      toast('3D görünüm yüklenemedi; yarış 2D devam ediyor');
+    });
+  }
+  function syncGfxUi() {
+    document.querySelectorAll('#gfxOpts [data-q]').forEach((b) => b.classList.toggle('sel', b.dataset.q === gfx));
+  }
+  document.querySelectorAll('#gfxOpts [data-q]').forEach((b) => (b.onclick = () => {
+    gfx = b.dataset.q;
+    store.set('imlec-kampi:grafik', gfx);
+    syncGfxUi();
+    if (R3D) R3D.setQuality(gfx);
+  }));
+
   // ---------- İzleyici modu ----------
   // Oyunda olmayan oyuncu süren bir maçı izleyebilir: kamera sahayı ortalar, ekrana sığmıyorsa
   // uzaklaşır (imleç olduğu yerde kalır). Yarışta öndeki aracı takip eder.
@@ -4668,40 +4702,51 @@
     }
     updateCamera(dt);
 
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#ecd9a4';
-    ctx.fillRect(0, 0, vw, vh);
-    ctx.save();
-    ctx.scale(zoom, zoom);
-    ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
-    const sx = Math.max(0, Math.floor(cam.x)), sy = Math.max(0, Math.floor(cam.y));
-    const sw = Math.min(W.CAMP_W - sx, Math.ceil(wvw) + 2), sh = Math.min(W.CAMP_H - sy, Math.ceil(wvh) + 2);
-    if (sw > 0 && sh > 0) ctx.drawImage(bg, sx, sy, sw, sh, sx, sy, sw, sh);
-    if (nearTrack()) TRACKDRAW.draw(ctx, cam.x, cam.y, wvw, wvh);
-    else if (joined) TRACKDRAW.prefetch(TR.PADS.join.x - wvw / 2, TR.PADS.join.y - wvh / 2);
-    drawWater(time);
-    drawPads(time);
-    drawMatch(time, rp);
-    drawRace(time, rr);
-    drawVolley(time, vp);
-    drawHockey(time, hp);
-    drawTankGame(time, tp, dt);
-    drawBlackjack(time);
-    drawBotPads();
+    // 3D yarış: dünya Three.js katmanında çizilir; bu 2D katman sadece üst arayüz (ışıklar, harita) için şeffaf kalır
+    const use3d = want3d();
+    if (use3d) ensure3d();
+    const on3d = use3d && !!R3D;
+    if (R3D && on3d !== r3dShown) { R3D.show(on3d); r3dShown = on3d; document.body.classList.toggle('race3d', on3d); }
+    if (on3d) {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, vw, vh);
+      R3D.frame(rr || new Map(), myId, (id) => (players.get(id) || {}).color || '#d8262b', dt);
+    } else {
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#ecd9a4';
+      ctx.fillRect(0, 0, vw, vh);
+      ctx.save();
+      ctx.scale(zoom, zoom);
+      ctx.translate(-Math.round(cam.x), -Math.round(cam.y));
+      const sx = Math.max(0, Math.floor(cam.x)), sy = Math.max(0, Math.floor(cam.y));
+      const sw = Math.min(W.CAMP_W - sx, Math.ceil(wvw) + 2), sh = Math.min(W.CAMP_H - sy, Math.ceil(wvh) + 2);
+      if (sw > 0 && sh > 0) ctx.drawImage(bg, sx, sy, sw, sh, sx, sy, sw, sh);
+      if (nearTrack()) TRACKDRAW.draw(ctx, cam.x, cam.y, wvw, wvh);
+      else if (joined) TRACKDRAW.prefetch(TR.PADS.join.x - wvw / 2, TR.PADS.join.y - wvh / 2);
+      drawWater(time);
+      drawPads(time);
+      drawMatch(time, rp);
+      drawRace(time, rr);
+      drawVolley(time, vp);
+      drawHockey(time, hp);
+      drawTankGame(time, tp, dt);
+      drawBlackjack(time);
+      drawBotPads();
 
-    const rt = time - INTERP_DELAY;
-    for (const p of players.values()) {
-      if (p.id === myId) continue;
-      p.render = interp(p.snaps, rt);
-      if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && !(vsim && vsim.players.has(p.id)) && !(hsim && hsim.players.has(p.id)) && !(tsim && tsim.players.has(p.id) && tsim.players.get(p.id).x >= 0) && inView(p.render.x, p.render.y, 200)) {
-        drawCursor(p, p.render.x, p.render.y, time, false);
+      const rt = time - INTERP_DELAY;
+      for (const p of players.values()) {
+        if (p.id === myId) continue;
+        p.render = interp(p.snaps, rt);
+        if (p.render && !(sim && sim.players.has(p.id)) && !(rr && rr.has(p.id)) && !(vsim && vsim.players.has(p.id)) && !(hsim && hsim.players.has(p.id)) && !(tsim && tsim.players.has(p.id) && tsim.players.get(p.id).x >= 0) && inView(p.render.x, p.render.y, 200)) {
+          drawCursor(p, p.render.x, p.render.y, time, false);
+        }
       }
+      if (joined && !myDisc && !myCar && !myV && !myH && !inTank()) {
+        const self = players.get(myId) || { name: me.name, color: me.color, skin: me.skin };
+        drawCursor(self, me.x, me.y, time, true);
+      }
+      ctx.restore();
     }
-    if (joined && !myDisc && !myCar && !myV && !myH && !inTank()) {
-      const self = players.get(myId) || { name: me.name, color: me.color, skin: me.skin };
-      drawCursor(self, me.x, me.y, time, true);
-    }
-    ctx.restore();
     audioFrame(dt, rr);
     if (joined && !inTank()) drawMinimap(); // tankta köşedeki tankları örtmesin
     drawOverlay();
