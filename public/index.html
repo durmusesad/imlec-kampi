@@ -359,6 +359,55 @@
   #rBoard .rrow .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #rBoard .rrow .inf { opacity: .6; }
   #rBoard .rrow.me { color: #ffe08a; }
+
+  /* 3D kokpit görünümü (EA F1 tarzı) */
+  body.race3d #players, body.race3d #ping, body.race3d #watchBar, body.race3d #keys { display: none !important; }
+  body.race3d.paused #players { display: block !important; }
+  body.race3d #raceHud {
+    width: 200px; background: rgba(14,16,22,.82); border: 0; border-left: 4px solid #e10600; border-radius: 4px;
+    box-shadow: none; padding: 8px 10px; backdrop-filter: blur(3px);
+  }
+  body.race3d #raceHud .rspd, body.race3d #raceHud .rgrid { display: none; }
+  body.race3d #rBoard .rrow { font-size: 13px; padding: 2px 0; }
+  #lapBox {
+    position: fixed; top: 12px; right: 12px; width: 190px; background: rgba(14,16,22,.82); color: #fff;
+    border-top: 4px solid #e10600; border-radius: 4px; padding: 8px 12px; font: 700 13px Arial, sans-serif; backdrop-filter: blur(3px);
+  }
+  #lapBox .lrow { display: flex; justify-content: space-between; align-items: baseline; }
+  #lapBox .lrow span { opacity: .6; font-size: 11px; letter-spacing: .06em; }
+  #lapBox .lrow b { font-size: 24px; font-variant-numeric: tabular-nums; }
+  #lapBox .lrow.t b { font-size: 15px; }
+  #tmap { position: fixed; inset: auto; left: 10px; top: 50%; transform: translateY(-50%); width: 240px; height: 240px; pointer-events: none; }
+  #wheel {
+    position: fixed; left: 50%; bottom: -36px; width: 420px; height: 190px; margin-left: -210px; pointer-events: none;
+    transform-origin: 50% 70%; filter: drop-shadow(0 6px 12px rgba(0,0,0,.5));
+  }
+  #wheel .face {
+    position: absolute; left: 70px; right: 70px; top: 20px; bottom: 0; border-radius: 34px 34px 70px 70px;
+    background: linear-gradient(180deg, #2a2d33, #121317 60%); border: 2px solid #050506;
+  }
+  #wheel .grip {
+    position: absolute; top: 46px; width: 92px; height: 150px; background: linear-gradient(90deg, #17181c, #2c2f36 50%, #17181c);
+    border: 2px solid #050506;
+  }
+  #wheel .grip.l { left: 6px; border-radius: 46px 18px 18px 46px; transform: rotate(-12deg); }
+  #wheel .grip.r { right: 6px; border-radius: 18px 46px 46px 18px; transform: rotate(12deg); }
+  #wheel .leds { display: flex; justify-content: center; gap: 4px; margin: 10px auto 6px; }
+  #wheel .leds i { width: 11px; height: 11px; border-radius: 50%; background: #2a2a2e; box-shadow: inset 0 0 0 1px #000; }
+  #wheel .leds i.on.g { background: #1ee05a; box-shadow: 0 0 6px #1ee05a; }
+  #wheel .leds i.on.r { background: #ff2a2a; box-shadow: 0 0 6px #ff2a2a; }
+  #wheel .leds i.on.b { background: #3d7bff; box-shadow: 0 0 6px #3d7bff; }
+  #wheel .scr {
+    margin: 0 16px; height: 72px; border-radius: 10px; background: radial-gradient(ellipse at 50% 30%, #0e2236, #05070b);
+    border: 2px solid #000; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; color: #fff;
+    font: 800 13px Arial, sans-serif;
+  }
+  #wheel .scr .side { text-align: center; display: flex; flex-direction: column; }
+  #wheel .scr .side b { font-size: 24px; font-variant-numeric: tabular-nums; }
+  #wheel .scr .side small { font-size: 10px; opacity: .65; letter-spacing: .1em; }
+  #wheel .scr .gear { font-size: 52px; line-height: 1; padding: 0 10px; color: #fff; text-shadow: 0 0 10px rgba(80,180,255,.6); }
+  #wheel .rpmbar { margin: 6px 26px 0; height: 6px; border-radius: 3px; background: #222; overflow: hidden; }
+  #wheel .rpmbar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #1ee05a, #f2c21b 70%, #ff2a2a); }
   #raceResults { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
   #raceResults .card { width: 420px; pointer-events: auto; }
   #rrSub { margin: -2px 0 0; font-size: 14px; opacity: .65; }
@@ -462,6 +511,25 @@
     <div id="rSlip" class="hidden">💨 Rüzgar arkası</div>
   </div>
   <div id="rBoard"></div>
+</div>
+<!-- 3D kokpit arayüzü: direksiyon ekranı (vites/hız/devir), sol pist haritası, sağ üst tur kutusu -->
+<div id="wheel" class="hidden">
+  <div class="grip l"></div><div class="grip r"></div>
+  <div class="face">
+    <div class="leds" id="wLeds"></div>
+    <div class="scr">
+      <div class="side"><b id="wRpm">0</b><small>RPM</small></div>
+      <div class="gear" id="wGear">N</div>
+      <div class="side"><b id="wSpd">0</b><small>KM/H</small></div>
+    </div>
+    <div class="rpmbar"><i id="wBar"></i></div>
+  </div>
+</div>
+<canvas id="tmap" class="hidden" width="240" height="240"></canvas>
+<div id="lapBox" class="hidden">
+  <div class="lrow"><span>TUR</span><b id="lLap">1/2</b></div>
+  <div class="lrow t"><span>SÜRE</span><b id="lTime">0:00.0</b></div>
+  <div class="lrow t"><span>EN İYİ</span><b id="lBest">—</b></div>
 </div>
 <div id="raceResults" class="hidden"><div class="card"><h1 id="rrTitle">🏁 Yarış sonuçları</h1><p id="rrSub"></p><div id="rrList"></div></div></div>
 <div id="toast"></div>

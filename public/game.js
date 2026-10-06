@@ -1416,6 +1416,9 @@
       $('rBest').textContent = parts.best;
       $('rSpeed').textContent = parts.speed;
       $('rSlip').classList.toggle('hidden', !parts.slip);
+      $('lLap').textContent = parts.lap;
+      $('lTime').textContent = parts.time;
+      $('lBest').textContent = parts.best;
     }
     const board = $('rBoard');
     board.innerHTML = '';
@@ -4496,6 +4499,88 @@
       toast('3D görünüm yüklenemedi; yarış 2D devam ediyor');
     });
   }
+  // Kokpit arayüzü: direksiyon ekranı. Vites/devir modeli audio.js'deki motor sesiyle aynı (ses ve gösterge uyuşsun)
+  const GEARS = [72, 112, 152, 192, 232, 272, 340], IDLE = 950, REDLINE = 7800;
+  const gauge = { gear: 0, rpm: IDLE, key: '' };
+  const LEDS = [];
+  for (let k = 0; k < 15; k++) {
+    const i = document.createElement('i');
+    i.className = k < 5 ? 'g' : k < 10 ? 'r' : 'b';
+    $('wLeds').appendChild(i);
+    LEDS.push(i);
+  }
+  function updateWheel(dt, car) {
+    const kmh = RC.kmh(car), thr = !!(car.input & RC.INPUT.UP);
+    let g = gauge.gear;
+    if (kmh > GEARS[g] * 0.985 && g < GEARS.length - 1) g++;
+    while (g > 0 && kmh < GEARS[g - 1] * 0.7) g--;
+    let target;
+    if (kmh < 4) { g = 0; target = IDLE + (thr ? 3600 : 0); } else {
+      const lo = g ? GEARS[g - 1] * 0.62 : 0, r = Math.max(0, Math.min(1, (kmh - lo) / (GEARS[g] - lo)));
+      target = Math.max(IDLE + 250, 2600 + r * (REDLINE - 2600) - (g === 0 ? 1200 * (1 - r) : 0));
+    }
+    gauge.gear = g;
+    gauge.rpm += (target - gauge.rpm) * (1 - Math.exp(-dt * (target > gauge.rpm ? 9 : 6)));
+    const vf = car.vx * Math.cos(car.a) + car.vy * Math.sin(car.a);
+    const gear = vf < -0.05 ? 'R' : kmh < 4 && !thr ? 'N' : String(g + 1);
+    const rpm = Math.round(gauge.rpm / 10) * 10;
+    const lit = Math.round(Math.max(0, Math.min(1, (gauge.rpm - 4200) / (REDLINE - 4400))) * 15);
+    $('wheel').style.transform = `rotate(${(car.steer || 0) * 32}deg)`;
+    const key = gear + '|' + kmh + '|' + rpm + '|' + lit;
+    if (key === gauge.key) return;
+    gauge.key = key;
+    $('wGear').textContent = gear;
+    $('wSpd').textContent = kmh;
+    $('wRpm').textContent = rpm;
+    $('wBar').style.width = Math.min(100, (gauge.rpm / REDLINE) * 100) + '%';
+    LEDS.forEach((l, k) => l.classList.toggle('on', k < lit));
+  }
+  // Sol pist haritası: pist çizgisi bir kez çizilir, her karede üstüne araçlar
+  const TMAP = { size: 240, pad: 16, bg: null, s: 1, ox: 0, oy: 0 };
+  function tmapPoint(x, y) {
+    return [TMAP.ox + (x - TMAP.x0) * TMAP.s, TMAP.oy + (y - TMAP.y0) * TMAP.s];
+  }
+  function drawTrackMap(rr) {
+    const cv = $('tmap'), c = cv.getContext('2d'), Z = TMAP.size;
+    if (!TMAP.bg) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i < TR.N; i++) { x0 = Math.min(x0, TR.X[i]); y0 = Math.min(y0, TR.Y[i]); x1 = Math.max(x1, TR.X[i]); y1 = Math.max(y1, TR.Y[i]); }
+      TMAP.s = (Z - TMAP.pad * 2) / Math.max(x1 - x0, y1 - y0);
+      TMAP.x0 = x0; TMAP.y0 = y0;
+      TMAP.ox = (Z - (x1 - x0) * TMAP.s) / 2; TMAP.oy = (Z - (y1 - y0) * TMAP.s) / 2;
+      const bg = document.createElement('canvas');
+      bg.width = bg.height = Z;
+      const b = bg.getContext('2d');
+      const path = () => { b.beginPath(); for (let i = 0; i <= TR.N; i += 3) { const [x, y] = tmapPoint(TR.X[i % TR.N], TR.Y[i % TR.N]); i ? b.lineTo(x, y) : b.moveTo(x, y); } b.closePath(); };
+      b.lineJoin = b.lineCap = 'round';
+      path(); b.strokeStyle = 'rgba(0,0,0,0.55)'; b.lineWidth = 9; b.stroke();
+      path(); b.strokeStyle = '#e10600'; b.lineWidth = 4.5; b.stroke();
+      path(); b.strokeStyle = 'rgba(255,255,255,0.55)'; b.lineWidth = 1; b.stroke();
+      // Start çizgisi
+      const [sx, sy] = tmapPoint(TR.X[0], TR.Y[0]);
+      b.save(); b.translate(sx, sy); b.rotate(Math.atan2(TR.TY[0], TR.TX[0]) + Math.PI / 2);
+      for (let k = -2; k < 2; k++) for (let j = 0; j < 2; j++) { b.fillStyle = (k + j) % 2 ? '#111' : '#fff'; b.fillRect(k * 3, j * 3 - 3, 3, 3); }
+      b.restore();
+      TMAP.bg = bg;
+    }
+    c.clearRect(0, 0, Z, Z);
+    c.drawImage(TMAP.bg, 0, 0);
+    for (const [id, r] of rr) {
+      if (id === myId) continue;
+      const [x, y] = tmapPoint(r.x, r.y), pl = players.get(id);
+      c.beginPath(); c.arc(x, y, 4, 0, Math.PI * 2);
+      c.fillStyle = pl ? pl.color : '#ccc'; c.fill();
+      c.strokeStyle = '#000'; c.lineWidth = 1.5; c.stroke();
+    }
+    const m = rr.get(myId);
+    if (m) {
+      const [x, y] = tmapPoint(m.x, m.y);
+      c.save(); c.translate(x, y); c.rotate(m.a);
+      c.beginPath(); c.moveTo(8, 0); c.lineTo(-5, 5); c.lineTo(-2, 0); c.lineTo(-5, -5); c.closePath();
+      c.fillStyle = '#fff'; c.fill(); c.strokeStyle = '#000'; c.lineWidth = 1.5; c.stroke();
+      c.restore();
+    }
+  }
   function syncGfxUi() {
     document.querySelectorAll('#gfxOpts [data-q]').forEach((b) => b.classList.toggle('sel', b.dataset.q === gfx));
   }
@@ -4706,11 +4791,19 @@
     const use3d = want3d();
     if (use3d) ensure3d();
     const on3d = use3d && !!R3D;
-    if (R3D && on3d !== r3dShown) { R3D.show(on3d); r3dShown = on3d; document.body.classList.toggle('race3d', on3d); }
+    if (R3D && on3d !== r3dShown) {
+      R3D.show(on3d);
+      r3dShown = on3d;
+      document.body.classList.toggle('race3d', on3d);
+      for (const id of ['wheel', 'tmap', 'lapBox']) $(id).classList.toggle('hidden', !on3d);
+    }
     if (on3d) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, vw, vh);
       R3D.frame(rr || new Map(), myId, (id) => (players.get(id) || {}).color || '#d8262b', dt);
+      const mine = rr && rr.get(myId);
+      if (mine) updateWheel(dt, mine.car);
+      if (rr) drawTrackMap(rr);
     } else {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.fillStyle = '#ecd9a4';
@@ -4748,7 +4841,7 @@
       ctx.restore();
     }
     audioFrame(dt, rr);
-    if (joined && !inTank()) drawMinimap(); // tankta köşedeki tankları örtmesin
+    if (joined && !inTank() && !r3dShown) drawMinimap(); // tankta köşedeki tankları örtmesin; 3D'de soldaki pist haritası var
     drawOverlay();
     drawVOverlay();
     drawHOverlay();

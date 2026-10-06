@@ -137,12 +137,25 @@ function buildCar(color, mat) {
   box(0.5, 0.65, 0.04, carbon, -2.35, 0.65, 0.5);
   box(0.5, 0.65, 0.04, carbon, -2.35, 0.65, -0.5);
   box(0.9, 0.12, 0.55, mat(0x0c0c0e, 0.8, 0), 0.25, 0.68, 0); // kokpit boşluğu
-  // Halo
-  const halo = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.035, 8, 24, Math.PI), carbon);
-  halo.rotation.set(-Math.PI / 2, 0, -Math.PI / 2);
-  halo.position.set(0.25, 0.92, 0);
-  car.add(halo);
-  box(0.06, 0.25, 0.06, carbon, 0.66, 0.8, 0); // halo ön ayağı
+  // Halo: sürücünün başının önünde yatay yay + ortada öne eğik ayak (kokpitten kalın siyah yay olarak görünür)
+  const haloMat = mat(0x0b0c0f, 0.35, 0.5);
+  const haloG = new THREE.Group();
+  const arc = new THREE.Mesh(new THREE.TorusGeometry(0.46, 0.05, 10, 32, Math.PI), haloMat);
+  arc.rotation.z = -Math.PI / 2; // yay +x (ön) tarafında
+  haloG.add(arc);
+  haloG.rotation.x = -Math.PI / 2; // yatay düzleme yatır
+  haloG.position.set(-0.28, 1.0, 0);
+  car.add(haloG);
+  const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.42, 0.09), haloMat);
+  pillar.position.set(0.26, 0.86, 0);
+  pillar.rotation.z = -0.55;
+  car.add(pillar);
+  // Aynalar
+  for (const z of [0.62, -0.62]) {
+    box(0.04, 0.03, 0.18, carbon, 0.25, 0.86, z * 0.85);
+    box(0.08, 0.1, 0.2, paint, 0.27, 0.9, z);
+  }
+  box(1.6, 0.03, 0.22, mat(0xf4f4f4, 0.4, 0.2), 1.2, 0.5, 0); // burun üstü beyaz şerit
   // Tekerlekler (ön ikisi direksiyonla döner)
   const wheels = [];
   for (const [x, z, front] of [[1.65, 0.82, 1], [1.65, -0.82, 1], [-1.6, 0.8, 0], [-1.6, -0.8, 0]]) {
@@ -407,13 +420,14 @@ export function create(quality) {
       // Yanal birim (sol): (fz, -fx)
       const lx = fz, lz = -fx;
       if (camMode === 'kokpit') {
+        // EA F1 kokpit kamerası: kask hizasının hafif üstü (1.24 m), sürücünün başı (araç merkezinin 0.45 m gerisi),
+        // ~8° aşağı bakış; halo ve ön lastikler ekranın alt yarısında
         const back = cam.lon * 0.004, side = -cam.lat * 0.003;
-        camera.position.set(me.x * S + fx * (-0.15 - back) + lx * side, 1.0 + sy - Math.abs(cam.lon) * 0.0008, me.y * S + fz * (-0.15 - back) + lz * side);
-        camera.position.x += lx * sx;
-        camera.position.z += lz * sx;
+        const hx = me.x * S + fx * (-0.45 - back) + lx * side, hz = me.y * S + fz * (-0.45 - back) + lz * side;
+        camera.position.set(hx + lx * sx, 1.24 + sy - Math.abs(cam.lon) * 0.0008, hz + lz * sx);
         camera.up.set(lx * cam.lat * 0.0012, 1, lz * cam.lat * 0.0012).normalize();
-        camera.lookAt(me.x * S + fx * 20, 0.75 - cam.lon * 0.004, me.y * S + fz * 20);
-        camera.fov = 76 + Math.min(10, v / 9);
+        camera.lookAt(hx + fx * 30, 1.24 - 4.2 - cam.lon * 0.02, hz + fz * 30);
+        camera.fov = 56 + Math.min(6, v / 15);
       } else {
         const want = new THREE.Vector3(me.x * S - fx * 7.5, 2.6, me.y * S - fz * 7.5);
         if (!cam.chase) cam.chase = want.clone();
