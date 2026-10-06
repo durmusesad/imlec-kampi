@@ -28,8 +28,34 @@ const TYPES = {
   '.ico': 'image/x-icon',
 };
 
+// ---------- Site şifresi ----------
+// SITE_PASSWORD tanımlıysa site gizlidir: sayfa, dosyalar (araç modeli dahil) ve oyun bağlantısı şifre ister.
+// Tarayıcı şifreyi bir kez sorar (HTTP Basic); doğruysa 30 günlük çerez verilir. Şifre koda değil Cloud Run ayarına yazılır.
+const SITE_PASSWORD = process.env.SITE_PASSWORD || '';
+const SITE_TOKEN = SITE_PASSWORD ? crypto.createHmac('sha256', SITE_PASSWORD).update('imlec-kampi-site').digest('hex') : '';
+function siteAuth(req) {
+  if (!SITE_PASSWORD) return 'open';
+  const ck = /(?:^|;\s*)ik_site=([a-f0-9]{64})/.exec(req.headers.cookie || '');
+  if (ck && safeEqual(ck[1], SITE_TOKEN)) return 'cookie';
+  const h = req.headers.authorization || '';
+  if (h.startsWith('Basic ')) {
+    const dec = Buffer.from(h.slice(6), 'base64').toString('utf8');
+    if (safeEqual(dec.slice(dec.indexOf(':') + 1), SITE_PASSWORD)) return 'basic';
+  }
+  return null;
+}
+
 // ---------- HTTP (statik dosyalar) ----------
 const server = http.createServer((req, res) => {
+  const auth = siteAuth(req);
+  if (!auth) {
+    res.writeHead(401, { 'WWW-Authenticate': 'Basic realm="Imlec Kampi", charset="UTF-8"', 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Bu site gizli. Giriş için şifre gerekli.');
+    return;
+  }
+  if (auth === 'basic') {
+    res.setHeader('Set-Cookie', `ik_site=${SITE_TOKEN}; Max-Age=${30 * 86400}; Path=/; HttpOnly; Secure; SameSite=Lax`);
+  }
   let urlPath;
   try {
     urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
@@ -927,6 +953,7 @@ function removePlayer(p) {
 // Hızlı sıkıştırma seviyesi seçildi; 12 oyuncu için sunucu yükü önemsiz.
 const wss = new WebSocketServer({
   server,
+  verifyClient: (info) => !!siteAuth(info.req), // gizli sitede oyun bağlantısı da şifre/çerez ister
   maxPayload: 4096,
   perMessageDeflate: { threshold: 128, zlibDeflateOptions: { level: 1, memLevel: 7 } },
 });

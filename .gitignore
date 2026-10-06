@@ -1,3 +1,5 @@
 node_modules/
 .DS_Store
 *.log
+# Lisanslı araç modeli (CC BY-NC-SA, dağıtılamaz): git ve GitHub dışında tutulur, sadece sunucuya yüklenir
+public/models/
