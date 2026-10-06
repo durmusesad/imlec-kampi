@@ -3,6 +3,8 @@
 // Kalite (düşük/orta/yüksek): çözünürlük, kenar yumuşatma, gölge, yansıma, görüş mesafesi, ağaç sayısı.
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 const T = window.TRACK, TD = window.TRACKDRAW;
 const S = 0.2; // m / px
@@ -172,6 +174,87 @@ function buildCar(color, mat) {
   return car;
 }
 
+// Hazır araç modeli (models/f1.glb ayrıntılı, f1_lo.glb rakipler için hafif). Model: Peter Kiss, CC BY-NC-SA.
+// Yüklenince: ön kanattan aracın önü bulunur ve +x'e çevrilir, yere oturtulur; tekerlek parçaları kendi
+// merkezleri etrafında dönen pivotlara alınır (ön tekerlekler ayrıca direksiyonla döner).
+const WHEELS = { fl: [/^fl_/, /^wheel\.Ft\.L/], fr: [/^fr_/, /^wheel\.Ft\.R/], rl: [/^rl_/, /^wheel\.Bk\.L/], rr: [/^rr_/, /^wheel\.Bk\.R/] };
+const PAINT = 'Carbon Fiber Procedural'; // modelin gövde malzemesi: oyuncu rengine boyanır
+const CARBON = /^Carbon Fiber \(no UV\)/; // prosedürel karbon dışa aktarılamadı: koyu karbon rengi verilir
+function prepModel(gltf) {
+  const src = gltf.scene;
+  src.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(src), ctr = box.getCenter(new THREE.Vector3());
+  const fw = src.getObjectByName('front_wing_mixer');
+  const fc = fw ? new THREE.Box3().setFromObject(fw).getCenter(new THREE.Vector3()) : ctr.clone().add(new THREE.Vector3(1, 0, 0));
+  const yaw = Math.atan2(-(fc.z - ctr.z), fc.x - ctr.x); // önü +x'e döndürmek için
+  const root = new THREE.Group();
+  const holder = new THREE.Group();
+  holder.add(src);
+  src.position.sub(ctr);
+  holder.rotation.y = -yaw;
+  root.add(holder);
+  root.updateMatrixWorld(true);
+  const b2 = new THREE.Box3().setFromObject(root);
+  holder.position.y = -b2.min.y;
+  root.updateMatrixWorld(true);
+  // Tekerlek pivotları
+  const wheels = [];
+  for (const [key, pats] of Object.entries(WHEELS)) {
+    const parts = [];
+    src.traverse((o) => { if (o.isMesh && pats.some((re) => re.test(o.name))) parts.push(o); });
+    if (!parts.length) continue;
+    const wb = new THREE.Box3();
+    for (const o of parts) wb.expandByObject(o);
+    const wc = wb.getCenter(new THREE.Vector3());
+    const steer = new THREE.Group(), spin = new THREE.Group();
+    steer.position.copy(wc);
+    root.add(steer);
+    steer.add(spin);
+    root.updateMatrixWorld(true);
+    for (const o of parts) spin.attach(o);
+    wheels.push({ key, front: key[0] === 'f' });
+  }
+  root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = false; } });
+  // Sürücünün başı: kokpit boşluğunun üst ortası (kokpit kamerası buradan bakar)
+  const ck = root.getObjectByName('cockpit_inner');
+  if (ck) {
+    const cb = new THREE.Box3().setFromObject(ck);
+    root.userData.head = new THREE.Vector3((cb.min.x + cb.max.x) / 2 - (cb.max.x - cb.min.x) * 0.15, cb.max.y, 0);
+  }
+  return root;
+}
+function cloneCar(tpl, color) {
+  const car = tpl.clone(true);
+  const paint = new Map();
+  car.traverse((o) => {
+    if (!o.isMesh) return;
+    const ms = Array.isArray(o.material) ? o.material : [o.material];
+    const out = ms.map((m) => {
+      if (CARBON.test(m.name)) {
+        if (!paint.has(m)) paint.set(m, new THREE.MeshStandardMaterial({ color: 0x15171b, roughness: 0.45, metalness: 0.3 }));
+        return paint.get(m);
+      }
+      if (m.name !== PAINT) return m;
+      if (!paint.has(m)) {
+        const p = new THREE.MeshPhysicalMaterial({ color, roughness: 0.32, metalness: 0.15, clearcoat: 0.8, clearcoatRoughness: 0.12 });
+        paint.set(m, p);
+      }
+      return paint.get(m);
+    });
+    o.material = Array.isArray(o.material) ? out : out[0];
+  });
+  // Tekerlek pivotlarını isimle bul (klon kendi pivotlarını taşır)
+  const wheels = [];
+  for (const g of car.children) {
+    if (g.isGroup && g.children.length === 1 && g.children[0].isGroup && g !== car.children[0]) {
+      wheels.push({ holder: g, w: g.children[0], front: g.position.x > 0, model: true });
+    }
+  }
+  car.userData.wheels = wheels;
+  car.userData.head = tpl.userData.head;
+  return car;
+}
+
 export function create(quality) {
   let Q = QUALITY[quality] || QUALITY.orta, qName = quality;
   let renderer = null, canvas = null;
@@ -302,13 +385,25 @@ export function create(quality) {
     world.add(crown, trunk);
   }
 
-  // Araçlar
-  const cars = new Map(); // id -> {obj, color}
-  function carFor(id, color) {
+  // Araçlar: model yüklenene kadar geçici gövde, sonra hazır model (kendi aracın ayrıntılı, rakipler hafif)
+  const models = { hi: null, lo: null };
+  const draco = new DRACOLoader().setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+  const loader = new GLTFLoader().setDRACOLoader(draco);
+  for (const k of ['lo', 'hi']) {
+    loader.load(`models/f1${k === 'lo' ? '_lo' : ''}.glb`, (g) => {
+      models[k] = prepModel(g);
+      for (const e of cars.values()) scene.remove(e.obj);
+      cars.clear(); // bir sonraki karede modelle yeniden kurulur
+    }, undefined, (e) => console.warn('araç modeli yüklenemedi', k, e));
+  }
+  const cars = new Map(); // id -> {obj, color, kind}
+  function carFor(id, color, mine) {
+    const want = mine && qName !== 'dusuk' && models.hi ? 'hi' : models.lo ? 'lo' : models.hi ? 'hi' : 'box';
     let e = cars.get(id);
-    if (e && e.color === color) return e;
+    if (e && e.color === color && e.kind === want) return e;
     if (e) scene.remove(e.obj);
-    e = { obj: buildCar(color, mat), color, spin: 0 };
+    const obj = want === 'box' ? buildCar(color, mat) : cloneCar(models[want], new THREE.Color(color));
+    e = { obj, color, spin: 0, kind: want };
     scene.add(e.obj);
     cars.set(id, e);
     return e;
@@ -382,14 +477,15 @@ export function create(quality) {
     const seen = new Set();
     for (const [id, r] of rr) {
       seen.add(id);
-      const e = carFor(id, colors(id));
+      const e = carFor(id, colors(id), id === myId);
       e.obj.position.set(r.x * S, 0, r.y * S);
       e.obj.rotation.y = -r.a;
       const v = Math.hypot(r.car.vx, r.car.vy) * 12; // m/s
       e.spin += (v * dt) / 0.36;
       for (const w of e.obj.userData.wheels) {
         if (w.front) w.holder.rotation.y = -(r.car.steer || 0) * 0.35;
-        w.w.rotation.y = -e.spin;
+        if (w.model) w.w.rotation.z = -e.spin; // modelde aks z ekseninde
+        else w.w.rotation.y = -e.spin;
       }
     }
     for (const [id, e] of cars) if (!seen.has(id)) { scene.remove(e.obj); cars.delete(id); }
@@ -423,13 +519,15 @@ export function create(quality) {
         // EA F1 kokpit kamerası: kask hizasının hafif üstü (1.24 m), sürücünün başı (araç merkezinin 0.45 m gerisi),
         // ~8° aşağı bakış; halo ve ön lastikler ekranın alt yarısında
         const back = cam.lon * 0.004, side = -cam.lat * 0.003;
-        const hx = me.x * S + fx * (-0.45 - back) + lx * side, hz = me.y * S + fz * (-0.45 - back) + lz * side;
-        camera.position.set(hx + lx * sx, 1.24 + sy - Math.abs(cam.lon) * 0.0008, hz + lz * sx);
+        const head = (cars.get(myId) || {}).obj?.userData.head; // modelde kokpitin üstü; geçici gövdede sabit
+        const ax = head ? head.x : -0.45, ay = head ? head.y + 0.42 : 1.24;
+        const hx = me.x * S + fx * (ax - back) + lx * side, hz = me.y * S + fz * (ax - back) + lz * side;
+        camera.position.set(hx + lx * sx, ay + sy - Math.abs(cam.lon) * 0.0008, hz + lz * sx);
         camera.up.set(lx * cam.lat * 0.0012, 1, lz * cam.lat * 0.0012).normalize();
-        camera.lookAt(hx + fx * 30, 1.24 - 4.2 - cam.lon * 0.02, hz + fz * 30);
+        camera.lookAt(hx + fx * 30, ay - 4.2 - cam.lon * 0.02, hz + fz * 30);
         camera.fov = 56 + Math.min(6, v / 15);
       } else {
-        const want = new THREE.Vector3(me.x * S - fx * 7.5, 2.6, me.y * S - fz * 7.5);
+        const want = new THREE.Vector3(me.x * S - fx * 9.5, 3.1, me.y * S - fz * 9.5);
         if (!cam.chase) cam.chase = want.clone();
         cam.chase.lerp(want, 1 - Math.exp(-dt * 8));
         camera.position.copy(cam.chase);

@@ -4795,12 +4795,13 @@
       R3D.show(on3d);
       r3dShown = on3d;
       document.body.classList.toggle('race3d', on3d);
-      for (const id of ['wheel', 'tmap', 'lapBox']) $(id).classList.toggle('hidden', !on3d);
+      for (const id of ['wheel', 'tmap', 'lapBox', 'credit']) $(id).classList.toggle('hidden', !on3d);
     }
     if (on3d) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, vw, vh);
-      R3D.frame(rr || new Map(), myId, (id) => (players.get(id) || {}).color || '#d8262b', dt);
+      // Kendi aracın her zaman kırmızı (F1 kırmızısı), rakipler kendi oyuncu renklerinde
+      R3D.frame(rr || new Map(), myId, (id) => (id === myId ? '#c8102e' : (players.get(id) || {}).color || '#d8262b'), dt);
       const mine = rr && rr.get(myId);
       if (mine) updateWheel(dt, mine.car);
       if (rr) drawTrackMap(rr);
