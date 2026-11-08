@@ -392,5 +392,5 @@
     c.restore();
   }
 
-  root.TRACKDRAW = { draw, prefetch, drawMini, TILE, STANDS, STAND_DEPTH, TREES };
+  root.TRACKDRAW = { draw, prefetch, drawMini, TILE };
 })(typeof self !== 'undefined' ? self : this);
